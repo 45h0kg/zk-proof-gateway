@@ -1,0 +1,32 @@
+------------------------------------------------------------------------
+SCENARIO: exec-agent-07 requests pre-trade clearance from risk-agent-01
+          private notional = $ 7,350,000.00  (cap $10,000,000.00)
+------------------------------------------------------------------------
+WIRE MESSAGE (proof envelope attached to the tool call / handoff):
+{
+  "schema": "zk-attach/v0",
+  "predicate_id": "pretrade_notional_cap",
+  "predicate_version": 1,
+  "engine": "bitor-sigma-secp256k1-py",
+  "context": {
+    "request_id": "ff9f929bff076b3b",
+    "nonce": "a24bb7fc454b2a496172e7e87a888ee4",
+    "predicate_id": "pretrade_notional_cap",
+    "predicate_version": 1,
+    "requester": "risk-agent-01",
+    "prover": "exec-agent-07",
+    "ts": 1785702111
+  },
+  "proof_b64": "eyJuYml0cyI6MzIsIkN2IjpbIjAyNjYzNjM4NmU4M2I4YzJj... (37664 b64 chars)"
+}
+------------------------------------------------------------------------
+DECISION: ALLOW   (prove 489 ms | verify 504 ms | audit entry bad299548fd2c699...)
+audit chain intact: True
+------------------------------------------------------------------------
+WHAT CROSSED THE AGENT BOUNDARY: predicate id+version, request context,
+a Pedersen commitment, and a zero-knowledge proof.
+WHAT DID NOT: the notional ($7.35M), the order, any raw position data.
+------------------------------------------------------------------------
+NEGATIVE SCENARIO: agent with notional $12.5M (> cap) tries to comply
+  honest prover refuses: predicate violated: value outside [0, cap], refusing to prove
+  (a MALICIOUS prover forging a proof is covered in tests_soundness.py)

@@ -1,0 +1,16 @@
+{
+  "engine": "bulletproofs-dalek-ristretto255 (rust 1.75, opt3+lto)",
+  "single": [
+    {"nbits": 8, "proof_bytes": 480, "prove_us_med": 1891, "verify_us_med": 423},
+    {"nbits": 16, "proof_bytes": 544, "prove_us_med": 3273, "verify_us_med": 619},
+    {"nbits": 32, "proof_bytes": 608, "prove_us_med": 6171, "verify_us_med": 1025},
+    {"nbits": 64, "proof_bytes": 672, "prove_us_med": 11455, "verify_us_med": 1781}
+  ],
+  "aggregated_64bit": [
+    {"m": 1, "proof_bytes": 672, "prove_us_med": 12104, "verify_us_med": 1798},
+    {"m": 2, "proof_bytes": 736, "prove_us_med": 24261, "verify_us_med": 2878},
+    {"m": 4, "proof_bytes": 800, "prove_us_med": 44440, "verify_us_med": 4346},
+    {"m": 8, "proof_bytes": 864, "prove_us_med": 85500, "verify_us_med": 7432},
+    {"m": 16, "proof_bytes": 928, "prove_us_med": 173011, "verify_us_med": 13660}
+  ]
+}

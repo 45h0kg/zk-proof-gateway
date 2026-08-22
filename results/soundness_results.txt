@@ -1,0 +1,21 @@
+T0  honest baseline
+  [PASS] valid proof verifies: expected True, got True
+T1  malicious prover with value > cap
+  [PASS] honest API refuses out-of-range: expected True, got True
+T2  bit-flip tampering in transit
+  [PASS] tampered response scalar rejected: expected False, got False
+  [PASS] swapped bit commitments rejected: expected False, got False
+T3  replay under different nonce
+  [PASS] cross-nonce replay rejected: expected False, got False
+T4  replay under different predicate version
+  [PASS] cross-version replay rejected: expected False, got False
+T5  compromised agent publishes its own predicate
+  [PASS] unsigned predicate rejected: expected True, got True
+  [PASS] wrong-key predicate rejected: expected True, got True
+T6  audit-log tampering
+  [PASS] untouched chain verifies: expected True, got True
+  [PASS] edited entry detected: expected False, got False
+T7  forged non-binary 'bit' (value overflow attempt)
+  [PASS] random forgery attempts succeeding (n=2000): expected 0, got 0
+
+SOUNDNESS SUITE: 11/11 checks passed

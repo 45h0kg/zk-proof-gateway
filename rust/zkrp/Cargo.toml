@@ -1,0 +1,15 @@
+[package]
+name = "zkrp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bulletproofs = "4.0"
+curve25519-dalek-ng = "4"
+merlin = "3"
+rand = "0.8"
+hex = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = true
