@@ -23,6 +23,54 @@ func sampleEntry(result string) Entry {
 	}
 }
 
+func TestNew_ResumesChainAcrossRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+
+	log1, err := New(path)
+	if err != nil {
+		t.Fatalf("New (first process): %v", err)
+	}
+	if _, err := log1.Append(sampleEntry("PASS")); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if _, err := log1.Append(sampleEntry("FAIL")); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	// Simulate a process restart against the SAME durable file (a PVC in
+	// Kubernetes, a bind mount in Docker Compose) -- this must NOT
+	// truncate the existing history.
+	log2, err := New(path)
+	if err != nil {
+		t.Fatalf("New (second process): %v", err)
+	}
+	if _, err := log2.Append(sampleEntry("PASS")); err != nil {
+		t.Fatalf("Append after restart: %v", err)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer f.Close()
+	n := 0
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		n++
+	}
+	if n != 3 {
+		t.Fatalf("expected all 3 entries (2 before restart + 1 after) to survive, got %d lines", n)
+	}
+
+	ok, err := VerifyChain(path)
+	if err != nil {
+		t.Fatalf("VerifyChain: %v", err)
+	}
+	if !ok {
+		t.Fatal("chain across the simulated restart must still verify (prev_hash must resume correctly, not reset to genesis)")
+	}
+}
+
 func TestAppendAndVerifyChain_RoundTrips(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	log, err := New(path)

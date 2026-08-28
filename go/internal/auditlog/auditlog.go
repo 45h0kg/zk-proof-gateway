@@ -38,13 +38,56 @@ type AuditLog struct {
 	prev string
 }
 
+// New opens the audit log at path, resuming the hash chain from the last
+// entry if the file already has content. It deliberately does NOT truncate
+// an existing file -- across a process restart against durable storage
+// (a PVC in Kubernetes, a bind mount in Docker Compose), truncating here
+// would silently wipe the entire non-repudiation trail on every restart,
+// defeating the point of durable storage entirely.
 func New(path string) (*AuditLog, error) {
-	f, err := os.Create(path) // truncate/create, matching Python's open(path,"w").close()
+	info, statErr := os.Stat(path)
+	if statErr == nil && info.Size() > 0 {
+		prev, err := lastEntryHash(path)
+		if err != nil {
+			return nil, fmt.Errorf("auditlog: reading existing chain: %w", err)
+		}
+		return &AuditLog{path: path, prev: prev}, nil
+	}
+	f, err := os.Create(path)
 	if err != nil {
 		return nil, err
 	}
 	f.Close()
 	return &AuditLog{path: path, prev: strings.Repeat("0", 64)}, nil
+}
+
+func lastEntryHash(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	last := strings.Repeat("0", 64)
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 1<<20), 1<<20)
+	for sc.Scan() {
+		line := sc.Text()
+		if line == "" {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			return "", err
+		}
+		if h, ok := rec["entry_hash"].(string); ok {
+			last = h
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return "", err
+	}
+	return last, nil
 }
 
 func qstr(s string) string {

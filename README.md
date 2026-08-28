@@ -145,21 +145,46 @@ and `gateway-networkpolicy.yaml` restricts ingress to the gateway pod to
 its own namespace (defense-in-depth; the gateway does need to be
 reachable, unlike the prover).
 
+The audit log is a `PersistentVolumeClaim`, not an `emptyDir` -- confirmed
+by deleting the gateway pod under load and checking the (pre-restart)
+entries were still there and the hash chain still verified afterward. An
+`emptyDir` would silently lose the entire non-repudiation trail on every
+pod restart/reschedule.
+
 Build and push `zkgw-gateway`/`zkgw-prover` images (from `docker/Dockerfile.gateway`
 / `docker/Dockerfile.prover`) to a registry your cluster can pull from, set
 `gateway.image`/`prover.image` in `values.yaml` accordingly, then:
 
 ```bash
 helm lint helm/zk-proof-gateway              # verified: passes
-helm template zkgw helm/zk-proof-gateway     # verified: renders, includes a NetworkPolicy
-helm install zkgw helm/zk-proof-gateway      # needs a cluster -- not run in this environment
+helm template zkgw helm/zk-proof-gateway     # verified: renders, includes both NetworkPolicies + the PVC
+helm install zkgw helm/zk-proof-gateway      # verified: see below
 ```
 
-No kind/minikube cluster was available when this chart was built, so only
-`helm lint` and `helm template` have actually been run and verified; `helm
-install` has not been exercised against a live cluster. See the chart's
-`NOTES.txt` for how to reach the gateway (and the caveat that the prover, by
-design, has no reachable route once the NetworkPolicy is enabled).
+**`helm install` has actually been run and verified**, against a local
+`kind` cluster: images built and `kind load docker-image`d in, chart
+installed with a real governance-signed predicate, PVC bound, both pods
+healthy. The five-scenario verifier was run as an in-cluster pod (mounting
+the same audit PVC, reaching the gateway via its Service DNS name and the
+prover via its pod IP) and passed 12/12, at ~2.5ms verify latency even
+inside the kind VM. `kindnet` (kind's default CNI) turned out to genuinely
+enforce both NetworkPolicies -- confirmed by watching the prover connection
+time out with the policy on and succeed with it temporarily disabled, not
+assumed.
+
+This test run also caught two real bugs, both fixed:
+- `values.yaml`'s `prover.sourceValue` was a bare YAML integer; Helm's
+  YAML->JSON->`interface{}` pipeline decodes all numbers as `float64`,
+  which rendered `735000000` as `7.35e+08` in the template and broke the
+  prover's `strconv.ParseInt`. Now a quoted string.
+- `go/internal/auditlog.New()` (and the Python `AuditLog.__init__` it was
+  ported from) unconditionally truncated the audit file on every process
+  start -- harmless for a one-shot local script, but it meant the PVC above
+  bought nothing: a gateway pod restart still silently wiped the whole
+  trail. Both now resume the hash chain from the last entry instead of
+  truncating; verified by deleting the gateway pod mid-test and confirming
+  prior entries survived and the chain still verified across the restart
+  boundary.
 
 ## Terraform (reference modules, unapplied)
 

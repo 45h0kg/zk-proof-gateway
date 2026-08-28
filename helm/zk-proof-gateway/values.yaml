@@ -10,6 +10,16 @@ gateway:
   resources:
     requests: {cpu: 50m, memory: 64Mi}
     limits: {cpu: 200m, memory: 128Mi}
+  audit:
+    persistence:
+      # The audit log is the non-repudiation trail -- an emptyDir loses
+      # every entry on pod restart/reschedule, which quietly breaks that
+      # guarantee. Enabled by default; set false only for throwaway
+      # clusters (e.g. a quick kind smoke test) where losing history is
+      # fine and no default StorageClass may be provisioned.
+      enabled: true
+      size: 1Gi
+      storageClassName: ""   # "" = cluster default StorageClass
 
 prover:
   image:
@@ -21,7 +31,13 @@ prover:
   # real OMS/position-service adapter behind read_source_value()
   # (python/prover_service.py) / readSourceValue() (go/proverservice) --
   # never set a real notional here.
-  sourceValue: 735000000
+  #
+  # MUST be a quoted string, not a bare YAML integer: Helm decodes
+  # values.yaml through a YAML->JSON->interface{} pipeline, and encoding/json
+  # always decodes numbers into float64 for interface{} targets. A bare
+  # 735000000 here renders as "7.35e+08" in the template, which the prover
+  # then fails to parse as an integer.
+  sourceValue: "735000000"
   agentId: exec-agent-07
   resources:
     requests: {cpu: 50m, memory: 64Mi}

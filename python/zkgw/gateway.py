@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import secrets
 import time
 from dataclasses import dataclass, asdict, field
@@ -64,12 +65,26 @@ class PredicateRegistry:
 
 # ------------------------------------------------------------------ audit log
 class AuditLog:
-    """Append-only hash chain: entry_hash = H(prev_hash || canonical(entry))."""
+    """Append-only hash chain: entry_hash = H(prev_hash || canonical(entry)).
+
+    Resumes the chain from the last entry if the file already has content,
+    rather than truncating -- across a process restart against durable
+    storage, truncating here would silently wipe the entire
+    non-repudiation trail every time the process starts.
+    """
 
     def __init__(self, path: str):
         self.path = path
-        self._prev = "0" * 64
-        open(path, "w").close()
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            with open(path) as f:
+                last = None
+                for line in f:
+                    if line.strip():
+                        last = line
+            self._prev = json.loads(last)["entry_hash"] if last else "0" * 64
+        else:
+            self._prev = "0" * 64
+            open(path, "w").close()
 
     def append(self, record: dict) -> str:
         record = dict(record, prev_hash=self._prev)
