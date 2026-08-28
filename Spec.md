@@ -137,10 +137,10 @@ Add a CI workflow .github/workflows/ci.yml that runs tests_soundness.py and veri
 Update experiments/run_all.sh only if needed; do not break the six-stage log.
 PR description must state exactly what was verified by running versus what was only linted/rendered. No claims of deployment that did not happen.
 
-================================================================
-STATUS ADDENDUM (post-implementation — see CHANGELOG.md for the PR-by-PR
-record and IMPLEMENTATION_HLD.md / IMPLEMENTATION_LLD.md for full detail)
-================================================================
+## Status addendum (post-implementation)
+
+See `CHANGELOG.md` for the PR-by-PR record and `IMPLEMENTATION_HLD.md` /
+`IMPLEMENTATION_LLD.md` for full detail.
 
 P0, P1, P2, and P3 are all done and merged to main. One deliberate
 deviation from the text above, decided mid-flight with the requester, not
@@ -162,16 +162,17 @@ requester's explicit ask, after P0-P3 landed:
    (the Rust cap-enforcement logic, the Go Schnorr-signature replication,
    the Go audit hash chain), plus a second, gateway-facing NetworkPolicy
    as defense-in-depth alongside the prover's deny-all one.
-2. A real `kind` cluster run of the Helm chart -- this spec's own P2
-   acceptance criteria allowed "template rendering is sufficient" if no
-   cluster was available, but one became available and installing for
-   real caught two genuine bugs (a Helm YAML/float-formatting trap that
-   broke the prover's configured value, and an audit log that silently
-   lost its entire history on every pod restart -- the PersistentVolumeClaim
-   this pass added would have been necessary-but-not-sufficient without
-   also fixing that second bug).
-2b. Durable audit storage (PVC in Helm, corrected truncate-on-restart
-   behavior in both the Go and Python audit-log implementations).
+2. A real `kind` cluster run of the Helm chart, plus durable audit storage
+   (a PersistentVolumeClaim in Helm instead of an `emptyDir`). This spec's
+   own P2 acceptance criteria allowed "template rendering is sufficient"
+   if no cluster was available, but one became available, and installing
+   for real caught two genuine bugs: a Helm YAML/float-formatting trap
+   that broke the prover's configured value, and an audit log that
+   silently lost its entire history on every pod restart regardless of
+   storage backing -- the PVC alone would have been
+   necessary-but-not-sufficient without also fixing that second bug
+   (corrected truncate-on-restart behavior in both the Go and Python
+   audit-log implementations).
 3. A dedicated security review of everything P0-P3 added (not just the
    crypto, which the soundness suite already covered): found and fixed a
    real governance-key exposure in the Docker Compose deployment (the

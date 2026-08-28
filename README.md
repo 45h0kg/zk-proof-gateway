@@ -449,9 +449,8 @@ MIT. See LICENSE.
 ## Citation and provenance
 
 If you use this work, cite the paper (BibTeX below once the arXiv ID is
-live). The manuscript and this implementation were developed with AI
-assistance (Anthropic's Claude); see the paper's acknowledgment. All
-results are reproducible from this repository.
+live). This implementation was developed with AI assistance (Anthropic's
+Claude). All results are reproducible from this repository.
 
 ```bibtex
 @misc{gopalakrishna2026zkgateway,
