@@ -1,16 +1,16 @@
 {
   "engine": "bulletproofs-dalek-ristretto255 (rust 1.75, opt3+lto)",
   "single": [
-    {"nbits": 8, "proof_bytes": 480, "prove_us_med": 1042, "verify_us_med": 222},
-    {"nbits": 16, "proof_bytes": 544, "prove_us_med": 1853, "verify_us_med": 326},
-    {"nbits": 32, "proof_bytes": 608, "prove_us_med": 3396, "verify_us_med": 518},
-    {"nbits": 64, "proof_bytes": 672, "prove_us_med": 6512, "verify_us_med": 905}
+    {"nbits": 8, "proof_bytes": 480, "prove_us_med": 1023, "verify_us_med": 215},
+    {"nbits": 16, "proof_bytes": 544, "prove_us_med": 1800, "verify_us_med": 321},
+    {"nbits": 32, "proof_bytes": 608, "prove_us_med": 3292, "verify_us_med": 504},
+    {"nbits": 64, "proof_bytes": 672, "prove_us_med": 6200, "verify_us_med": 857}
   ],
   "aggregated_64bit": [
-    {"m": 1, "proof_bytes": 672, "prove_us_med": 6503, "verify_us_med": 897},
-    {"m": 2, "proof_bytes": 736, "prove_us_med": 12611, "verify_us_med": 1529},
-    {"m": 4, "proof_bytes": 800, "prove_us_med": 24878, "verify_us_med": 2523},
-    {"m": 8, "proof_bytes": 864, "prove_us_med": 47851, "verify_us_med": 4408},
-    {"m": 16, "proof_bytes": 928, "prove_us_med": 93655, "verify_us_med": 7888}
+    {"m": 1, "proof_bytes": 672, "prove_us_med": 6207, "verify_us_med": 883},
+    {"m": 2, "proof_bytes": 736, "prove_us_med": 12170, "verify_us_med": 1520},
+    {"m": 4, "proof_bytes": 800, "prove_us_med": 23741, "verify_us_med": 2527},
+    {"m": 8, "proof_bytes": 864, "prove_us_med": 45871, "verify_us_med": 4257},
+    {"m": 16, "proof_bytes": 928, "prove_us_med": 88854, "verify_us_med": 7577}
   ]
 }

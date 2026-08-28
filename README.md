@@ -68,30 +68,47 @@ Or run everything, including the governance workflow, with one command:
 bash experiments/run_all.sh   # writes results/execution_log.txt + artifacts
 ```
 
-## Agentic protocol demo (zk-attach/v0 over JSON-RPC)
+## Agentic protocol demo (zk-attach/v0 over JSON-RPC: MCP and A2A)
 
-`agent_server.py` is an execution-venue agent speaking MCP-shaped
-JSON-RPC 2.0 over HTTP. It advertises a governed `submit_order` tool whose
-`x_zk_required` field names the predicate a caller must prove, issues
-single-use request contexts via `zk/context`, and enforces the middleware
-rule on `tools/call`: a governed call without a valid `zk_attachment` is
-denied by default and never reaches the tool.
+`agent_server.py` (and its Go rewrite, `go/gatewayservice`) is an
+execution-venue agent speaking **two** protocol surfaces on the same HTTP
+endpoint, sharing one verification chain, one audit log, and one orders
+ledger underneath:
+
+- **MCP-shaped**: advertises a governed `submit_order` tool whose
+  `x_zk_required` field names the predicate a caller must prove, and
+  enforces the middleware rule on `tools/call` -- a governed call without a
+  valid `zk_attachment` is denied by default and never reaches the tool.
+- **A2A (Agent2Agent)**: advertises the same governed action as a
+  `submit_order` skill in an Agent Card at `GET /.well-known/agent.json`;
+  the governed path is `message/send`, with a `zk_attachment` carried in a
+  Message data part instead of `tools/call` params (see `HLD.md` section 5
+  for the exact shape). `tasks/get` polls a task by id; `tasks/cancel`
+  always errors, since every task here completes synchronously during
+  `message/send`.
+
+Both surfaces share `zk/context` for issuing request contexts -- a caller
+obtains a context the same way regardless of which surface it then calls
+back on.
 
 `verify_e2e.py` boots the server and plays an execution agent holding a
-private notional, then checks five scenarios over the wire and the audit
-chain:
+private notional, then checks five MCP scenarios plus the A2A surface over
+the wire, and the audit chain:
 
 ```bash
 cd python
-python3 verify_e2e.py     # expect "AGENTIC PROTOCOL E2E: 12/12 checks passed"
+python3 verify_e2e.py     # expect "AGENTIC PROTOCOL E2E: 19/19 checks passed"
 ```
 
-The five scenarios are: a compliant order with a valid proof (ALLOW,
+The five MCP scenarios are: a compliant order with a valid proof (ALLOW,
 notional absent from every wire byte); a governed call with no attachment
 (denied by default); a tampered proof (denied, recorded as an audited
 FAIL); a valid attachment replayed against a different order (denied by
 single-use context binding); and an over-cap notional (the honest prover
-refuses locally, so nothing is ever sent).
+refuses locally, so nothing is ever sent). The A2A checks confirm the
+Agent Card, `message/send`'s ALLOW/deny-by-default paths, `tasks/get`,
+`tasks/cancel`, and that an order placed via A2A lands on the same ledger
+`venue/orders` (MCP) reports.
 
 ## Prover as a separate service
 
@@ -124,7 +141,7 @@ ZKGW_SOURCE_VALUE=735000000 /tmp/prover-service --port 8753 \
 cd ../python
 ZKGW_PROVER_URL=http://127.0.0.1:8753 \
 ZKGW_GATEWAY_CMD="/tmp/gateway-service --zkrp-bin ../rust/zkrp/target/release/zkrp" \
-  python3 verify_e2e.py     # expect "AGENTIC PROTOCOL E2E: 12/12 checks passed"
+  python3 verify_e2e.py     # expect "AGENTIC PROTOCOL E2E: 19/19 checks passed"
 ```
 
 ## Run with Docker

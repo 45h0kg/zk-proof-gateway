@@ -5,6 +5,59 @@ chronological order. See `IMPLEMENTATION_HLD.md`/`IMPLEMENTATION_LLD.md`
 for full architectural detail and `Spec.md`'s status addendum for how this
 relates to the original one-day spec.
 
+## PR #6 — A2A (Agent2Agent) protocol surface
+
+Adds the other binding `HLD.md`'s protocol-extension section always
+described but never implemented ("fits in MCP `tools/call` params or an
+A2A message part"). Both gateways now speak real A2A wire format
+alongside the existing MCP-shaped methods, on the same HTTP endpoint,
+sharing one verification chain, audit log, and orders ledger.
+
+### Added
+- `go/gatewayservice/a2a.go` + `python/agent_server.py`: `message/send`,
+  `tasks/get`, `tasks/cancel`, and an Agent Card at
+  `GET /.well-known/agent.json`. The governed action's name/arguments
+  travel in a Message data part alongside `zk_attachment`
+  (`{"skill", "arguments", "zk_attachment"}` — this repo's own convention;
+  A2A leaves that payload application-defined). Tasks complete
+  synchronously, so `tasks/cancel` always errors.
+- `go/gatewayservice/a2a_test.go`: unit tests for the pure helpers and the
+  two fast-fail paths that don't need a live registry or `zkrp` binary.
+- `verify_e2e.py`: seven new checks covering the Agent Card, `message/send`
+  ALLOW + deny-by-default, `tasks/get`, `tasks/cancel`, and the shared
+  ledger — deliberately not re-running every MCP adversarial case a second
+  time, since the verification chain underneath is the same shared
+  function already covered by S1-S5.
+
+### Changed
+- Refactored `handleToolsCall`/`tools/call`'s entire verification chain
+  into a protocol-agnostic `processGovernedCall`/`process_governed_call`
+  in both gateways, so MCP and A2A share one implementation instead of
+  two. No MCP behavior change — reran every existing scenario before and
+  after.
+
+### Verified
+- Both engines: all 19 checks (`cargo test`, `go test`, full
+  `verify_e2e.py`) pass — in-process Python, networked Python, and Go+Rust.
+- Rebuilt and reran against the real docker-compose stack; both required
+  greps for the private value still zero hits.
+- Not reverified against a live `kind` cluster — PR #3's cluster numbers
+  predate this addition.
+
+## PR #5 — Fix Mermaid/Markdown rendering bugs in docs
+
+- `HLD.md`'s Section V sequence diagram still failed to render after an
+  earlier fix — the real cause was Mermaid treating `;` as a statement
+  separator in message text (not the `<=` operator the earlier fix
+  addressed). Replaced the semicolon with a comma.
+- `CHANGELOG.md` still said `[Unreleased] — security review` after that
+  work was merged as PR #4 — retitled to match the other entries.
+- `Spec.md`'s status addendum: an ASCII `====` banner sat directly below
+  its heading text with no blank line, triggering Markdown's Setext H1
+  syntax and rendering as an oversized, out-of-place heading. Replaced
+  with a normal `##` header; also cleaned up an invalid `2b.` list item.
+- `README.md`: tidied the citation section wording.
+
 ## PR #4 — Security review + design doc refresh
 
 Dedicated security pass over the Go/Docker/Helm/Terraform surface added by

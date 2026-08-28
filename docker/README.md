@@ -63,7 +63,7 @@ docker run --rm --network docker_internal \
   -e ZKGW_REGISTRY_DIR=/registry \
   -e ZKGW_AUDIT_PATH=/audit/audit_log.jsonl \
   python:3.12-slim python3 verify_e2e.py
-# ... AGENTIC PROTOCOL E2E: 12/12 checks passed
+# ... AGENTIC PROTOCOL E2E: 19/19 checks passed
 ```
 
 `ZKGW_GATEWAY_URL` and `ZKGW_REGISTRY_DIR`/`ZKGW_AUDIT_PATH` attach the

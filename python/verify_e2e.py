@@ -5,7 +5,9 @@ Boots the execution-venue server, then plays an execution agent that
 holds a PRIVATE order notional and interacts purely over MCP-shaped
 JSON-RPC 2.0. Exercises the positive path and four adversarial paths,
 checks every expected outcome including the audit chain, and exits 0
-only if all checks pass.
+only if all checks pass. Also exercises the A2A (Agent2Agent) surface,
+which shares the identical deny-by-default verification chain and audit
+log/orders ledger as MCP -- only the wire shape differs.
 
 Scenarios:
   S1  compliant order + valid proof            -> ALLOW, order on ledger
@@ -15,6 +17,8 @@ Scenarios:
       DIFFERENT order_ref                          single-use + bound)
   S5  notional above cap                       -> prover refuses locally;
                                                   nothing ever sent
+  A2A Agent Card + message/send + tasks/get +  -> same guarantees, A2A
+      tasks/cancel, shared ledger with MCP        wire shape
 
 Run:  python3 verify_e2e.py
 """
@@ -254,6 +258,56 @@ def main():
                 check("honest prover refuses out-of-policy value", False)
             except ValueError:
                 check("honest prover refuses out-of-policy value", True)
+
+        # ---- A2A: same verification chain, different wire shape. Only
+        # the new surface itself needs coverage here (Agent Card,
+        # message/send, tasks/get, tasks/cancel, shared ledger) -- the
+        # underlying deny-by-default chain is process_governed_call /
+        # processGovernedCall, already fully exercised by S1-S5 above.
+        print("A2A  Agent Card, message/send, tasks/get, tasks/cancel")
+        with urllib.request.urlopen(f"{URL}/.well-known/agent.json", timeout=10) as r:
+            card = json.loads(r.read())
+        check("agent card advertises submit_order skill",
+              any(s.get("id") == "submit_order" for s in card.get("skills", [])))
+
+        ctx_a2a = rpc("zk/context", {"predicate_id": "pretrade_notional_cap",
+                                     "predicate_version": 1, "prover": agent.agent_id,
+                                     "action_ref": "ord-a2a-1"})["result"]["context"]
+        env_a2a = obtain_envelope(pred_doc, pred, ctx_a2a, agent)
+        env_a2a.pop("_prove_ms", None)
+        msg = {"role": "user", "kind": "message", "messageId": "m-a2a-1",
+               "parts": [{"kind": "data", "data": {
+                   "skill": "submit_order",
+                   "arguments": {"order_ref": "ord-a2a-1", "symbol": "XYZ", "side": "buy"},
+                   "zk_attachment": env_a2a}}]}
+        r = rpc("message/send", {"message": msg})
+        task = r.get("result", {})
+        check("A2A ALLOW decision",
+              task.get("status", {}).get("state") == "completed",
+              f"task {task.get('id')}")
+        check("A2A notional absent from every wire byte",
+              "735000000" not in json.dumps(r) and "7350000" not in json.dumps(r))
+        task_id = task.get("id")
+
+        r = rpc("message/send", {"message": {"role": "user", "kind": "message",
+                                             "messageId": "m-a2a-2",
+                                             "parts": [{"kind": "data", "data": {
+                                                 "skill": "submit_order",
+                                                 "arguments": {"order_ref": "ord-a2a-2"}}}]}})
+        check("A2A denied by default (no zk_attachment)",
+              r.get("result", {}).get("status", {}).get("state") == "failed")
+
+        got = rpc("tasks/get", {"id": task_id})
+        check("A2A tasks/get retrieves the completed task",
+              got.get("result", {}).get("status", {}).get("state") == "completed")
+
+        cancelled = rpc("tasks/cancel", {"id": task_id})
+        check("A2A tasks/cancel on a terminal task errors",
+              "error" in cancelled and "terminal" in cancelled["error"]["message"])
+
+        ledger = rpc("venue/orders", {})["result"]["orders"]
+        check("A2A order lands on the same shared ledger as MCP",
+              any(o["order_ref"] == "ord-a2a-1" for o in ledger))
 
         # ---- audit chain: intact, and contains S1 PASS + S3 FAIL
         print("AUDIT  hash chain and recorded outcomes")
