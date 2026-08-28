@@ -1,0 +1,29 @@
+{{- if .Values.networkPolicy.enabled }}
+# Defense-in-depth, additive to the prover's deny-all policy
+# (networkpolicy.yaml). The gateway DOES need to be reachable -- it's the
+# verifier, and is meant to be called by agents/tools -- so this can't be
+# deny-all. Restricting ingress to the gateway's own namespace is a
+# sensible default for a reference chart: it stops arbitrary cluster-wide
+# workloads from hitting it while still allowing a same-namespace verifier
+# Job/Pod (see NOTES.txt) or an Ingress/gateway-API resource layered on top
+# by the deployer. Tighten further (e.g. to a specific caller label) once
+# you know who's actually allowed to call this gateway in your cluster.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-zkgw-gateway-same-namespace
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: zkgw-gateway
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+{{- end }}

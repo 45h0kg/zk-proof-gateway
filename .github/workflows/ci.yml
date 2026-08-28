@@ -31,6 +31,12 @@ jobs:
       - name: Build zkrp (Rust Bulletproofs engine)
         working-directory: rust/zkrp
         run: cargo build --release
+      - name: Unit test zkrp (cap enforcement, tamper/context/cap rejection)
+        working-directory: rust/zkrp
+        run: cargo test --release
+      - name: Unit test Go packages (Schnorr verify, audit hash chain, context binding)
+        working-directory: go
+        run: go test ./...
       - name: Build Go gateway/prover services
         working-directory: go
         run: |

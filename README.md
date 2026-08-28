@@ -138,9 +138,12 @@ to bring the stack up and run the five-scenario verifier against it.
 `helm/zk-proof-gateway/` deploys the same Go+Rust gateway and prover:
 prover co-located in one pod with a placeholder source-of-truth container
 (the paper's topology A), gateway as a separate ClusterIP-only Deployment,
-and a deny-all-ingress `NetworkPolicy` on the prover pod -- see the chart's
-`networkpolicy.yaml` for why that's deny-*all*, not "allow from the
-gateway" (the gateway never calls the prover directly in this protocol).
+and two NetworkPolicies: `networkpolicy.yaml` denies **all** ingress to the
+prover pod (see that file for why it's deny-*all*, not "allow from the
+gateway" -- the gateway never calls the prover directly in this protocol),
+and `gateway-networkpolicy.yaml` restricts ingress to the gateway pod to
+its own namespace (defense-in-depth; the gateway does need to be
+reachable, unlike the prover).
 
 Build and push `zkgw-gateway`/`zkgw-prover` images (from `docker/Dockerfile.gateway`
 / `docker/Dockerfile.prover`) to a registry your cluster can pull from, set
