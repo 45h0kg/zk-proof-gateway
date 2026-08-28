@@ -6,8 +6,8 @@
 # the correct deny-by-default policy for the prover pod is deny-ALL
 # ingress, not an allow-list naming the gateway (which isn't part of this
 # call path at all). See IMPLEMENTATION_LLD.md P2 section for the full
-# reasoning and the alternative (gateway-facing) policy this chart does not
-# currently add.
+# reasoning. gateway-networkpolicy.yaml is the separate, additive policy
+# for the gateway pod itself (which DOES need to be reachable).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

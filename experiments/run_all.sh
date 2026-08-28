@@ -46,9 +46,10 @@ stage "STAGE 3: PYTHON ENGINE + E2E BENCHMARKS"
 python3 bench.py
 echo "stage 3 exit: $?"
 
-stage "STAGE 4: RUST BULLETPROOFS BUILD + BENCH"
+stage "STAGE 4: RUST BULLETPROOFS BUILD + UNIT TESTS + BENCH"
 cd "$ROOT/rust/zkrp"
 if [ ! -x target/release/zkrp ]; then cargo build --release 2>&1 | tail -3; fi
+cargo test --release 2>&1 | tail -15
 ./target/release/zkrp bench | tee "$ROOT/results/bulletproofs_bench.json"
 echo "stage 4 exit: $?"
 
@@ -70,8 +71,9 @@ cd "$ROOT/python"
 python3 verify_e2e.py
 echo "stage 6 exit: $?"
 
-stage "STAGE 7: AGENTIC PROTOCOL E2E (Go gateway + Go prover, Rust Bulletproofs E2 engine)"
+stage "STAGE 7: GO UNIT TESTS + AGENTIC PROTOCOL E2E (Go gateway + Go prover, Rust Bulletproofs E2 engine)"
 cd "$ROOT/go"
+go test ./...
 go build -o /tmp/zkgw-gateway-service ./gatewayservice
 go build -o /tmp/zkgw-prover-service ./proverservice
 ZKGW_SOURCE_VALUE=735000000 /tmp/zkgw-prover-service --port 8793 \
