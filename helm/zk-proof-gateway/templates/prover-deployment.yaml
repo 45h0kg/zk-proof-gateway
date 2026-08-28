@@ -23,6 +23,9 @@ spec:
         app.kubernetes.io/name: zkgw-prover
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
+      # Neither the gateway nor the prover ever calls the Kubernetes API --
+      # no ServiceAccount token needs to be mounted into either pod.
+      automountServiceAccountToken: false
       containers:
         - name: source-placeholder
           image: "{{ .Values.prover.sourcePlaceholder.image.repository }}:{{ .Values.prover.sourcePlaceholder.image.tag }}"

@@ -12,6 +12,12 @@ yourself.
 Deliberately does not touch Confidential Space -- that's out of scope for
 this pass; see the root README's security status and `Spec.md`.
 
+**State security:** this module uses local Terraform state by default,
+which is unencrypted and can contain a short-lived cluster auth token
+(from `data.google_client_config`) in plaintext. For anything beyond a
+disposable local run, configure a remote backend with encryption at rest
+(e.g. a GCS bucket with a CMEK) instead of local state.
+
 ```bash
 terraform init
 terraform validate

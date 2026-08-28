@@ -1,184 +1,214 @@
-# Implementation HLD — Spec.md: One-Day Containerization
+# Implementation HLD — Containerizing the ZK Proof Gateway
 
-Companion to `Spec.md` (the requirements) and `HLD.md` (the paper's architecture).
-This document is the *build* architecture: how the four priorities (P0-P3) land on
-top of the current code, in what order, and what changes shape.
-
-Scope is exactly `Spec.md`'s priority order. Stop at whichever P-level the day
-runs out at; each P-level is independently shippable and each has its own
-acceptance criteria already defined in `Spec.md`.
+Companion to `Spec.md` (the original one-day containerization ask), `HLD.md`
+(the paper's architecture), and `IMPLEMENTATION_LLD.md` (file-by-file
+detail). This document describes the **as-built** system, not the original
+plan — see `Spec.md`'s status addendum for how the two diverge and why.
 
 ---
 
-## 1. Where we start vs. where P0 takes us
+## 1. What actually shipped, in one paragraph
 
-**Today:** `agent_server.py` is the gateway process. `verify_e2e.py` constructs
-`ExecutionAgent` in the same Python process and calls `.prove()` directly —
-there is no prover process, no network hop, no trust boundary between prover
-and gateway. This is fine for the paper's cryptographic claims (which are about
-the proof, not the deployment) but doesn't match the paper's described topology
-(prover co-located with the source of truth, gateway elsewhere) and can't be
-containerized as two separate trust cells.
+The prover was split out of the in-process gateway into a real HTTP
+service (`Spec.md`'s P0), exactly as asked, in Python first. Partway
+through, the request shifted from "containerize the Python reference
+engine" to "the network-facing services should be fast, not just correct" —
+so P0's HTTP contract was re-implemented a second time in Go, proving via
+a Rust Bulletproofs engine instead of the Python Sigma-OR engine. That
+Go+Rust pair is what P1 (Docker), P2 (Helm), and P3 (Terraform) actually
+containerize and deploy. The original Python `agent_server.py` /
+`prover_service.py` remain in the repo as the paper's E1 reference
+implementation — readable, dependency-light, intentionally not the
+production path — but nothing in `docker/`, `helm/`, or `terraform/`
+builds or ships them.
 
-**After P0:** a new standalone process, `prover_service.py`, owns the private
-value and the `prove_range_leq` call. `verify_e2e.py` gains a second code path
-that talks to it over HTTP instead of calling `ExecutionAgent` in-process. Nothing
-about the crypto changes — `rangeproof.py`, `gateway.py`'s `make_envelope`, and
-`agent_server.py`'s verification chain are untouched. P0 is purely: *move the
-existing prove step behind an HTTP boundary.*
+Three follow-on passes hardened what P0-P3 first produced: unit tests for
+the pieces that previously only had end-to-end coverage, a real `kind`
+cluster run that caught two genuine bugs template-rendering alone never
+would have, and a security review that caught a real governance-key
+exposure and a couple of DoS-shaped gaps. All of this is merged to `main`;
+see `CHANGELOG.md` for the PR-by-PR record.
+
+## 2. Two engines, one contract
 
 ```mermaid
 flowchart LR
-    subgraph before["today (in-process)"]
-      V1[verify_e2e.py] -->|"ExecutionAgent.prove()"| V1
-      V1 -->|tools/call + envelope| A1[agent_server.py]
+    subgraph E1["E1 -- Python reference (not deployed)"]
+      PSV[prover_service.py] -->|Sigma-OR proof, ~500ms verify| ASV[agent_server.py]
     end
-    subgraph after["after P0 (networked mode)"]
-      V2[verify_e2e.py] -->|"POST /prove"| P2[prover_service.py]
-      P2 -->|envelope| V2
-      V2 -->|tools/call + envelope| A2[agent_server.py]
+    subgraph E2["E2 -- Go+Rust (P1/P2/P3 deploy this)"]
+      GOP[go/proverservice] -->|"exec: rust/zkrp prove"| RZ[rust/zkrp CLI]
+      GOG[go/gatewayservice] -->|"exec: rust/zkrp verify"| RZ
+      GOP -.same HTTP contract.-> GOG
     end
+    RZ -->|Bulletproofs, ~2-8ms verify| GOG
 ```
 
-This is additive: the in-process path stays as the default (`ZKGW_PROVER_URL`
-unset), so nothing that passes today can regress.
+Both engines expose the identical wire contract: `POST /prove` on the
+prover, the same MCP-shaped JSON-RPC surface (`initialize`, `tools/list`,
+`zk/context`, `tools/call`, `venue/orders`) plus `GET /healthz` on the
+gateway. `python/verify_e2e.py` drives either pairing, or any mix of a
+locally-run gateway with a networked prover, via three environment
+variables: `ZKGW_PROVER_URL` (hit an external prover instead of proving
+in-process), `ZKGW_GATEWAY_CMD` (spawn a different gateway binary), and
+`ZKGW_GATEWAY_URL` (attach to an already-running gateway instead of
+spawning one — what makes testing the persistent Docker/kind deployments
+meaningful rather than re-proving the protocol against a throwaway
+instance).
 
-## 2. P0 — prover as an HTTP service
+The Go gateway's Schnorr signature verification (`go/internal/predicate`)
+replicates `zkgw.primitives.sign`/`sig_verify` exactly — same secp256k1
+curve, same challenge hash, same point compression — so predicates signed
+by the existing `governance_cli.py` verify unmodified against either
+engine. The Go audit log (`go/internal/auditlog`) is byte-compatible with
+Python's canonical-JSON hash chain in the same way: confirmed by having
+Python's own `AuditLog.verify_chain` re-verify a log file the Go gateway
+wrote. Governance predicate signing stays Python in both worlds — it is
+never on a request path, and the whole point of hand-rolled Python crypto
+there is that a human can read it without trusting a compiled toolchain.
 
-`prover_service.py` is a sibling to `agent_server.py`: same style (stdlib
-`http.server`, no frameworks), same "no LLM in the trust path" philosophy. It
-owns exactly one secret — the value behind `read_source_value()` — and exposes
-two endpoints: `/prove` and `/healthz`.
+## 3. rust/zkrp: the cap-enforcement fix
 
-Its only two callers in P0 are: a human running `curl`/manual tests, and
-`verify_e2e.py` in networked mode. It does **not** talk to the gateway; it has
-no knowledge of `agent_server.py` at all. The caller (agent / test script)
-gets an envelope from the prover and separately submits it to the gateway —
-this matches the existing protocol shape (`zk/context` → prove → `tools/call`)
-and keeps the prover completely decoupled from the verifier, which is the
-point of the trust-boundary story.
+The Rust engine existed before this effort but only proved "`v` fits in
+`n` bits" — no `cap` parameter anywhere. `cmd_prove`/`cmd_verify` now
+implement the actual `range_leq` reduction: `v` and `d = cap - v` are both
+range-proved as one 2-aggregate Bulletproof, and the verifier derives
+`C_d = cap*B - C_v` itself homomorphically rather than trusting a
+prover-supplied commitment — the same construction as the Python E1
+engine, just over ristretto255 instead of secp256k1. This was refactored
+into pure `prove_range_leq()`/`verify_range_leq()` functions (no
+`process::exit`, no printing) specifically so it could be unit-tested
+directly; 7 `cargo test` cases cover the honest path and every adversarial
+one (tamper, wrong context, lowered cap, over-cap refusal, bit-width
+violation, malformed input).
 
-Security invariant carried forward unchanged: **the service must not produce
-a proof for a false statement.** `rangeproof.prove_range_leq` already raises
-`ValueError` when the value exceeds the cap (this is what scenario S5 relies
-on today); P0 just needs to translate that into HTTP 422 at the boundary,
-never a 200 with a bogus envelope.
-
-## 3. P1 — containers
-
-Two images, one compose file, three logical parts:
-
-- **bootstrap** (run-once, gateway image, different entrypoint via override):
-  runs `governance_cli.py keygen` + `define`, writing into a registry volume.
-  Idempotent — checks whether the predicate file already exists before doing
-  anything.
-- **prover**: the prover image, configured with the demo's fixed private value
-  (`ZKGW_SOURCE_VALUE=735000000`), on the **internal-only** network — no
-  published port. This is the load-bearing demo point: the value never leaves
-  its trust cell, and there is no route from the host (or the gateway) to
-  fetch it except through the proof it produces.
-- **gateway**: the gateway image, publishes 8752, mounts the registry
-  read-only and an audit volume read-write.
+## 4. Deployment topology
 
 ```mermaid
 flowchart TB
-    subgraph host["host network"]
-      H["localhost:8752"]
+    subgraph host["host / kubectl"]
+      H["localhost:8752 (Docker) or\nkubectl port-forward (Helm)"]
     end
-    subgraph internal["internal-only network"]
-      PR["prover container\n(ZKGW_SOURCE_VALUE, no published port)"]
-      GW["gateway container\n:8752 published"]
+    subgraph net["internal-only network / prover pod"]
+      PR["prover\nno published port, no Service\ndeny-ALL ingress NetworkPolicy"]
     end
-    BOOT["bootstrap (run-once)"] -->|writes| REG[(registry volume\nbind-mounted)]
+    subgraph gw["gateway"]
+      GW["gateway\n:8752 published/Serviced\nsame-namespace NetworkPolicy"]
+      PVC[("audit PVC / bind mount\nsurvives restarts")]
+    end
+    BOOT["bootstrap (Python, one-shot)\ngovernance_cli.py keygen + define"] -->|"writes secret to a\nkeys-only path,\nNEVER given to gw/prover"| KEYS[("keys-only store")]
+    BOOT -->|"writes pub key +\nsigned predicate"| REG[("registry\n(ConfigMap / bind mount)")]
     REG -->|read-only| GW
-    GW -->|read-write, bind-mounted| AUD[(audit volume)]
+    GW <--> PVC
     H --> GW
-    PR -.no path to host.-x H
+    PR -.no path to host or gateway.-x H
 ```
 
-Both the registry and audit volumes are **bind mounts to host directories**
-(not anonymous Docker volumes) — required so the acceptance check "grep the
-gateway logs and audit volume for `735000000`" can actually be run from the
-host shell, and so the demo can show the predicate file's contents without
-`docker cp`.
+Docker Compose and the Helm chart both implement the same shape, adapted
+to each platform's idiom:
 
-Two code fixes are required for this topology to work at all, not called out
-explicitly in `Spec.md` but necessary given how the current servers bind:
+- **Docker Compose**: prover and gateway share one `internal: true`
+  network; the gateway additionally joins a second, non-internal network
+  *solely* so its own `ports:` mapping actually works — an
+  `internal: true` network silently drops port publishing entirely, which
+  is not obvious from the compose file syntax and was found by testing,
+  not assumed. Registry and audit are host bind mounts (not anonymous
+  volumes) so the demo's grep-for-the-private-value check can run directly
+  from the host shell. The governance secret lives in a *third*,
+  keys-only bind mount that is mounted into `bootstrap` alone — the
+  gateway/prover images never see it.
+- **Helm**: prover is a sidecar co-located with a placeholder
+  source-of-truth container in one pod (the paper's topology A — the
+  prover belongs next to the source of truth, not next to the gateway),
+  with no Service of any kind exposing that pod. The gateway is a separate
+  ClusterIP Deployment. The audit volume is a `PersistentVolumeClaim`, not
+  an `emptyDir` — confirmed by deleting the gateway pod under load and
+  checking prior entries survived. Two `NetworkPolicy` objects: deny-*all*
+  ingress on the prover (the gateway never calls the prover directly in
+  this protocol — the calling *agent* fetches from the prover, then
+  separately submits to the gateway — so an allow-list naming the gateway
+  would be the wrong policy), and same-namespace-only ingress on the
+  gateway as defense-in-depth (the gateway does need to be reachable).
+  Confirmed genuinely *enforced*, not just declared: watched the prover
+  connection time out with the policy on and succeed with it disabled, on
+  a real `kind` cluster.
+- **Terraform**: `terraform/gke` and `terraform/eks` are minimal, unapplied
+  reference modules — a small cluster plus a `helm_release` of the chart
+  above. GKE's node pool requests least-privilege OAuth scopes
+  (`devstorage.read_only`, `logging.write`, `monitoring`), not the full
+  `cloud-platform` scope. Both modules note that local Terraform state is
+  unencrypted and can hold a short-lived cluster auth token in plaintext —
+  a remote, encrypted backend is recommended for anything beyond a
+  disposable local run.
 
-- `agent_server.py` and `prover_service.py` must bind `0.0.0.0`, not
-  `127.0.0.1` — otherwise the published port and inter-container calls are
-  both dead on arrival.
-- `verify_e2e.py`, to genuinely exercise the *containerized* stack (not just
-  re-prove the P0 claim against a bare `prover_service.py`), needs a way to
-  attach to the already-running gateway container instead of spawning its own
-  throwaway `agent_server.py` on the same port. See LLD §2.4 for the proposed
-  `ZKGW_GATEWAY_URL` extension — this is inferred, not in `Spec.md`'s text,
-  flagged as a judgment call.
+## 5. Security posture: what's hardened, what's still open
 
-## 4. P2 — Helm chart
+Hardened (see `CHANGELOG.md` for specifics):
+- Governance secret key never reaches the gateway/prover's filesystem in
+  either Docker or Helm (Helm never referenced it in the first place;
+  Docker's bootstrap originally did, fixed in the security review pass).
+- Both Go HTTP servers cap request bodies at 1 MiB (`http.MaxBytesReader`)
+  — previously unbounded reads were a trivial memory-exhaustion DoS.
+- The gateway's in-memory context map is TTL-swept (5 minutes) instead of
+  growing for the lifetime of the process.
+- Internal subprocess error detail (Rust CLI stdout/exit status) is logged
+  server-side only, not echoed into JSON-RPC error responses.
+- `automountServiceAccountToken: false` on both Helm Deployments — neither
+  pod calls the Kubernetes API.
+- The audit log now survives process restarts (the PVC/bind-mount fix) —
+  and, separately, `auditlog.New()` no longer truncates an existing file on
+  startup, which the PVC fix alone would not have caught, since the
+  original Python `AuditLog.__init__` (which the Go code was ported from)
+  had the identical bug.
 
-Same three trust cells, expressed as a chart:
+Still open, explicitly deferred rather than silently dropped:
+- **No transport authentication at all** between callers and
+  gateway/prover — both speak plain HTTP. NetworkPolicy (Helm) and the
+  internal-only network (Compose) restrict *who can route to* the pods,
+  but nothing authenticates *which* caller is on the other end of an
+  allowed connection. mTLS is the planned next step.
+- **No HTTP server timeouts or graceful shutdown** on either Go service —
+  `http.ListenAndServe` with zero-value `Server` has no
+  read/write/idle/header timeouts (slowloris-class DoS is possible), and
+  neither service handles SIGTERM to drain in-flight requests before
+  exiting. Bundled with the mTLS work, since it's the same "harden the Go
+  servers" theme and the same files.
+- **Set-membership / boolean-composition predicate types remain stubs.**
+  The README already documents this as the main deliberate extension
+  point; extending it now, under time pressure, risks the same failure
+  mode P3 explicitly avoided by skipping enclave integration — a
+  half-finished new cryptographic construction is worse than an honestly
+  documented gap. Boolean AND-composition and real multi-predicate
+  aggregation (reusing the 2-aggregate construction already built for cap
+  enforcement, generalized to more predicates) are in scope as a bounded,
+  non-novel extension; full OR-composition/set-membership is not.
+- **No observability** (metrics, structured logs beyond the one audit-entry
+  log line), **no HA story** (`replicas: 1` hardcoded, no
+  PodDisruptionBudget), **no image pinning by digest**, **no
+  `readOnlyRootFilesystem`/dropped-capabilities `securityContext`**, and
+  **no audit-log rotation or external shipping** — all real
+  production-readiness gaps, all lower-urgency than the items above, not
+  yet scheduled.
 
-- Prover as a **sidecar in the gateway's own pod is wrong** — re-read the
-  paper's topology: the prover must be co-located with the *source of truth*,
-  not with the gateway (the gateway is the verifier, arm's-length by design).
-  `Spec.md` says "sidecar... in the same pod as a placeholder source
-  container" — i.e., prover + placeholder-source share a pod; gateway is a
-  separate Deployment entirely. This is the stronger story and the one that
-  matches §6 of `HLD.md` (topology A: source-side prover).
-- `NetworkPolicy` is the artifact that actually enforces "prover has no path
-  except through its own proof": deny-by-default ingress to the
-  prover/source pod, allow only from nothing external — it doesn't even need
-  to allow the gateway, since the gateway never calls the prover directly in
-  this protocol (the *agent* calls the prover, then separately calls the
-  gateway). Re-reading `Spec.md`'s networkpolicy.yaml line: "allow only from
-  the gateway pod selector" — reconcile this against the actual call graph
-  before implementing; see LLD §3.3 for the resolution.
+## 6. Verification record
 
-```mermaid
-flowchart TB
-    subgraph pod_prover["Pod: source + prover sidecar"]
-      SRC[placeholder source container]
-      PRV[prover sidecar :8753]
-    end
-    subgraph pod_gw["Deployment: gateway"]
-      GW[gateway :8752]
-    end
-    NP["NetworkPolicy: deny-by-default ingress\nto prover pod"] -.enforces.-> pod_prover
-    SVC[gateway-service ClusterIP] --> pod_gw
-```
+Every claim above has actually been run, not just reasoned about:
 
-## 5. P3 — Terraform (stretch)
+| What | How verified |
+|---|---|
+| Cap enforcement (Rust) | `cargo test` (7 cases) + manual CLI smoke tests |
+| Schnorr verify (Go) matches Python | Unit test against a fixture signed by the real `governance_cli.py`, not self-generated |
+| Audit hash chain (Go) matches Python | Python's own `AuditLog.verify_chain` re-verifies a Go-written log |
+| Docker stack, both containers | `docker compose up --build`, healthy, full 5-scenario verifier against the *persistent* containers, both grep checks clean |
+| Audit durability (Docker) | Restarted the gateway container mid-test, entries survived |
+| `helm lint` / `helm template` | Both pass, including with real predicate content via `--set-file` |
+| `helm install` on a real cluster | `kind` cluster: images built and loaded, chart installed, PVC bound, in-cluster verifier pod (mounting the same audit PVC) — 12/12 at ~2.5ms verify latency |
+| NetworkPolicy enforcement | Empirically confirmed on that same `kind` cluster (not assumed) |
+| Audit durability (Kubernetes) | Deleted the gateway pod mid-test on that cluster, entries and chain survived across the restart boundary |
+| `terraform validate` / `fmt -check` | Both modules, including after the GKE OAuth-scope fix |
+| CI | `.github/workflows/ci.yml` runs both engines' full E2E path plus all unit tests on every push |
 
-Reference-only modules (`terraform/gke/`, `terraform/eks/`) that stand up a
-small cluster and `helm install` the P2 chart. Explicitly unapplied unless
-actually run — `terraform validate` + `terraform fmt -check` are the bar, not
-a live apply. Skip without guilt if P0-P2 consume the day, per `Spec.md`.
-
-## 6. What must not regress, end to end
-
-Carried through every P-level unchanged:
-
-- Prover refuses to prove a false statement (`ValueError` in-process → HTTP
-  422 networked → same property, different transport).
-- Context binding (`action_ref` etc.) stays in the Fiat-Shamir transcript;
-  P0-P2 never touch `rangeproof.py`.
-- Gateway is deny-by-default; P0-P2 don't add any alternate path to
-  `submit_order`.
-- Audit chain still hash-verifies (`AuditLog.verify_chain`).
-- `tests_soundness.py` (11/11) and the existing in-process `verify_e2e.py`
-  (12/12) are pinned as regression gates, not just one-time acceptance checks
-  — the new CI workflow runs both on every push.
-
-## 7. Build order for the day
-
-1. P0: `prover_service.py` + `verify_e2e.py` networked mode + the two bind-host
-   fixes. Verify both modes print 12/12 before moving on.
-2. P1: `requirements.txt`, both Dockerfiles, compose, docker README, root
-   README edits, `.gitignore`. Verify the full stack comes up and the grep
-   check is clean before moving on.
-3. CI workflow (cheap, do this alongside P1, not last — a green badge only
-   means something if it was there before the PR closes).
-4. P2: Helm chart. `helm lint` + `helm template` are the floor; cluster
-   deploy is a bonus, state clearly which one happened.
-5. P3: only if time remains.
+`terraform apply` and any enclave/Confidential-Space work remain
+unattempted — stated here plainly, matching the standard this whole effort
+has tried to hold to: state exactly what ran versus what was only
+linted/rendered/validated.

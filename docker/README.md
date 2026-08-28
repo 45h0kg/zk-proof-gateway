@@ -24,11 +24,13 @@ docker compose ps
 # docker-prover-1                             Up (healthy)   <- no PORTS: never published
 ```
 
-`bootstrap` runs once, writes the governance keypair and the signed
-`pretrade_notional_cap@v1` predicate into `./.demo-registry/` (a host bind
-mount, not a Docker volume, so it's directly inspectable), and exits 0. It
-is idempotent -- rerunning `up` skips regeneration if the predicate file
-already exists.
+`bootstrap` runs once and exits 0; idempotent -- reruns skip regeneration if
+the predicate file already exists. It writes the governance **secret** key
+only to `./.demo-keys/` (a host bind mount that is **never** mounted into
+the gateway or prover containers -- keeping the signing key off agent
+hosts, per the root README's enforcement checklist). Only the public key
+and the signed `pretrade_notional_cap@v1` predicate (both non-sensitive) go
+into `./.demo-registry/`, which the gateway does mount, read-only.
 
 ## Run the five-scenario verifier against the real containerized stack
 
@@ -51,11 +53,13 @@ your checkout):
 ```bash
 docker run --rm --network docker_internal \
   -v "$(pwd)/../python:/app:ro" \
+  -v "$(pwd)/.demo-keys:/keys:ro" \
   -v "$(pwd)/.demo-registry:/registry:ro" \
   -v "$(pwd)/.demo-audit:/audit" \
   -w /app \
   -e ZKGW_GATEWAY_URL=http://gateway:8752 \
   -e ZKGW_PROVER_URL=http://prover:8753 \
+  -e ZKGW_KEYS_DIR=/keys \
   -e ZKGW_REGISTRY_DIR=/registry \
   -e ZKGW_AUDIT_PATH=/audit/audit_log.jsonl \
   python:3.12-slim python3 verify_e2e.py
@@ -65,7 +69,11 @@ docker run --rm --network docker_internal \
 `ZKGW_GATEWAY_URL` and `ZKGW_REGISTRY_DIR`/`ZKGW_AUDIT_PATH` attach the
 verifier to the **persistent** gateway container and its real registry/audit
 files, instead of spawning a throwaway gateway of its own -- this is what
-makes the audit-volume check below meaningful.
+makes the audit-volume check below meaningful. `ZKGW_KEYS_DIR` is only
+needed by the verifier's own S5 test step (signing an ad hoc predicate) --
+a test-tooling need, not something the gateway or prover ever require;
+that's exactly why the secret lives in a separate directory the deployed
+containers never mount.
 
 ## Confirm the audit trail, and that the private value never crossed the boundary
 
@@ -89,6 +97,7 @@ docker compose down -v
 ```
 
 `-v` also removes the compose-managed volumes; the bind-mounted
-`.demo-registry/` and `.demo-audit/` directories are host files and are left
-in place (delete them by hand, e.g. `rm -rf .demo-registry .demo-audit`, if
-you want a fully clean slate before the next `up`).
+`.demo-keys/`, `.demo-registry/`, and `.demo-audit/` directories are host
+files and are left in place (delete them by hand, e.g.
+`rm -rf .demo-keys .demo-registry .demo-audit`, if you want a fully clean
+slate before the next `up`).

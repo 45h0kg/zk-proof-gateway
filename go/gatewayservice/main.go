@@ -56,9 +56,17 @@ var governedTools = map[string]govRequirement{
 }
 
 type ctxEntry struct {
-	ctx  zkctx.Context
-	used bool
+	ctx       zkctx.Context
+	used      bool
+	createdAt time.Time
 }
+
+// contextTTL bounds how long an issued-but-unclaimed (or already-used)
+// context stays in memory. Without this, state.contexts grows without
+// bound for the lifetime of the process -- every zk/context call adds an
+// entry that was otherwise never removed, a trivial memory-exhaustion
+// vector for any caller able to reach that endpoint at all.
+const contextTTL = 5 * time.Minute
 
 type Order struct {
 	OrderRef   string `json:"order_ref"`
@@ -75,6 +83,25 @@ type VenueState struct {
 	mu       sync.Mutex
 	contexts map[string]*ctxEntry
 	orders   []Order
+}
+
+// sweepExpiredContexts runs for the lifetime of the process, periodically
+// evicting contexts older than contextTTL regardless of whether they were
+// ever used -- bounds state.contexts to roughly one TTL window's worth of
+// traffic instead of growing forever.
+func (s *VenueState) sweepExpiredContexts() {
+	ticker := time.NewTicker(contextTTL / 2)
+	defer ticker.Stop()
+	for range ticker.C {
+		cutoff := time.Now().Add(-contextTTL)
+		s.mu.Lock()
+		for id, entry := range s.contexts {
+			if entry.createdAt.Before(cutoff) {
+				delete(s.contexts, id)
+			}
+		}
+		s.mu.Unlock()
+	}
 }
 
 func randHex(n int) string {
@@ -154,10 +181,20 @@ type proofPayload struct {
 	CommitVHex string `json:"commit_v_hex"`
 }
 
+// maxBodyBytes bounds request bodies well above any legitimate JSON-RPC
+// call (envelopes for the E2 Bulletproofs engine are a few hundred bytes)
+// -- without a cap, an unbounded io.ReadAll on an attacker-controlled body
+// is a trivial memory-exhaustion DoS.
+const maxBodyBytes = 1 << 20 // 1 MiB
+
 func handleRPC(state *VenueState) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req rpcRequest
-		body, _ := io.ReadAll(r.Body)
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+		if err != nil {
+			writeRPC(w, rpcError(nil, -32700, "request body too large or unreadable"))
+			return
+		}
 		if err := json.Unmarshal(body, &req); err != nil {
 			writeRPC(w, rpcError(nil, -32700, fmt.Sprintf("parse error: %v", err)))
 			return
@@ -219,7 +256,7 @@ func dispatch(state *VenueState, req rpcRequest) rpcResponse {
 			TS:               time.Now().Unix(),
 		}
 		state.mu.Lock()
-		state.contexts[ctx.RequestID] = &ctxEntry{ctx: ctx}
+		state.contexts[ctx.RequestID] = &ctxEntry{ctx: ctx, createdAt: time.Now()}
 		state.mu.Unlock()
 		return rpcResult(req.ID, map[string]any{"context": ctx})
 
@@ -299,7 +336,11 @@ func handleToolsCall(state *VenueState, req rpcRequest) rpcResponse {
 
 	auditEntry, verifyMs, ok, err := verifyAttachment(state, att, attCtx)
 	if err != nil {
-		return rpcError(req.ID, -32038, fmt.Sprintf("denied: verification error (%v)", err))
+		// Log the real error server-side only -- it can contain internal
+		// detail (subprocess stdout/exit status, file paths) that
+		// shouldn't be echoed back to an untrusted caller over the wire.
+		log.Printf("verification error: %v", err)
+		return rpcError(req.ID, -32038, "denied: verification error")
 	}
 	if !ok {
 		short := auditEntry
@@ -461,6 +502,7 @@ func main() {
 		zkrp:     zkrpclient.New(*zkrpBin),
 		contexts: map[string]*ctxEntry{},
 	}
+	go state.sweepExpiredContexts()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
