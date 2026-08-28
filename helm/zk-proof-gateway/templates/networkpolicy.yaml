@@ -1,0 +1,25 @@
+{{- if .Values.networkPolicy.enabled }}
+# Ties to the paper's governed-channel assumption. Read literally, one
+# might expect "allow only from the gateway" here -- but in this protocol
+# the gateway never calls the prover directly: the calling AGENT fetches an
+# envelope from the prover, then separately submits it to the gateway. So
+# the correct deny-by-default policy for the prover pod is deny-ALL
+# ingress, not an allow-list naming the gateway (which isn't part of this
+# call path at all). See IMPLEMENTATION_LLD.md P2 section for the full
+# reasoning and the alternative (gateway-facing) policy this chart does not
+# currently add.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-zkgw-prover-deny-ingress
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: zkgw-prover
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+  # No ingress: rules below -> deny all inbound traffic to the prover pod.
+{{- end }}

@@ -1,5 +1,7 @@
 # ZK Proof Gateway
 
+[![CI](https://github.com/45h0kg/zk-proof-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/45h0kg/zk-proof-gateway/actions/workflows/ci.yml)
+
 Reference implementation for the paper *"Zero-Knowledge Data Minimization
 for Multi-Agent AI Systems: A Proof-Verification Gateway Architecture for
 Data Privacy Between Agents"* (arXiv link: TBD).
@@ -24,12 +26,20 @@ python/zkgw/            core library
   gateway.py            predicate registry, proof gateway, audit log, agents
 python/governance_cli.py  keygen / sign / verify predicates (governing entity tool)
 python/demo_trading.py    end-to-end case study from the paper (Section V)
+python/prover_service.py  prover as an HTTP service, Python E1 engine
 python/tests_soundness.py adversarial suite T0-T7 (11 checks)
 python/bench.py           benchmark harness, writes results/ CSVs and charts
 rust/zkrp/                Bulletproofs engine ("E2", dalek ristretto255) CLI
+go/gatewayservice/        gateway rewrite in Go, verifies via rust/zkrp (E2)
+go/proverservice/         prover rewrite in Go, proves via rust/zkrp (E2)
+docker/                   Dockerfiles + compose for the Go+Rust stack
+helm/zk-proof-gateway/    Helm chart for the Go+Rust stack (lint/template-verified)
+terraform/gke/, eks/      reference cluster + helm_release modules (unapplied)
 experiments/run_all.sh    one-command full reproduction with logged output
 results/                  sample outputs from a logged run (regenerate with run_all.sh)
 HLD.md                    design document with diagrams
+IMPLEMENTATION_HLD.md      architecture for the containerization/Go+Rust build-out
+IMPLEMENTATION_LLD.md      file-by-file detail for the same
 ```
 
 ## Requirements
@@ -81,6 +91,84 @@ notional absent from every wire byte); a governed call with no attachment
 FAIL); a valid attachment replayed against a different order (denied by
 single-use context binding); and an over-cap notional (the honest prover
 refuses locally, so nothing is ever sent).
+
+## Prover as a separate service
+
+The prover can run as a real, separate process instead of in-process with
+the gateway -- this is what closes the gap between the demo above and the
+paper's described topology (prover co-located with the source of truth,
+gateway elsewhere). Two implementations exist behind the same HTTP contract
+(`POST /prove`, `GET /healthz`):
+
+- `python/prover_service.py` -- the Python Sigma-OR engine (E1), stdlib-only.
+- `go/proverservice` + `go/gatewayservice` -- a Go rewrite of both prover and
+  gateway, verifying proofs via the Rust Bulletproofs engine (`rust/zkrp`,
+  E2) invoked as a subprocess. Predicate registries signed by
+  `governance_cli.py` verify unmodified against the Go gateway -- the
+  governance signature scheme (Schnorr over secp256k1) is replicated exactly.
+  Verification drops from ~500ms (E1) to single-digit milliseconds (E2).
+
+`verify_e2e.py` drives either combination via two environment variables:
+`ZKGW_PROVER_URL` points it at an already-running prover service instead of
+proving in-process, and `ZKGW_GATEWAY_CMD` swaps which gateway binary it
+spawns (default: the in-repo Python `agent_server.py`). For example, against
+the Go+Rust stack:
+
+```bash
+cd go
+go build -o /tmp/gateway-service ./gatewayservice
+go build -o /tmp/prover-service ./proverservice
+ZKGW_SOURCE_VALUE=735000000 /tmp/prover-service --port 8753 \
+  --zkrp-bin ../rust/zkrp/target/release/zkrp &
+cd ../python
+ZKGW_PROVER_URL=http://127.0.0.1:8753 \
+ZKGW_GATEWAY_CMD="/tmp/gateway-service --zkrp-bin ../rust/zkrp/target/release/zkrp" \
+  python3 verify_e2e.py     # expect "AGENTIC PROTOCOL E2E: 12/12 checks passed"
+```
+
+## Run with Docker
+
+`docker/docker-compose.yml` containerizes the Go+Rust gateway and prover
+with the prover on an internal-only network (never published to the host) --
+see [`docker/README.md`](docker/README.md) for the exact, verified commands
+to bring the stack up and run the five-scenario verifier against it.
+
+## Kubernetes (Helm)
+
+`helm/zk-proof-gateway/` deploys the same Go+Rust gateway and prover:
+prover co-located in one pod with a placeholder source-of-truth container
+(the paper's topology A), gateway as a separate ClusterIP-only Deployment,
+and a deny-all-ingress `NetworkPolicy` on the prover pod -- see the chart's
+`networkpolicy.yaml` for why that's deny-*all*, not "allow from the
+gateway" (the gateway never calls the prover directly in this protocol).
+
+Build and push `zkgw-gateway`/`zkgw-prover` images (from `docker/Dockerfile.gateway`
+/ `docker/Dockerfile.prover`) to a registry your cluster can pull from, set
+`gateway.image`/`prover.image` in `values.yaml` accordingly, then:
+
+```bash
+helm lint helm/zk-proof-gateway              # verified: passes
+helm template zkgw helm/zk-proof-gateway     # verified: renders, includes a NetworkPolicy
+helm install zkgw helm/zk-proof-gateway      # needs a cluster -- not run in this environment
+```
+
+No kind/minikube cluster was available when this chart was built, so only
+`helm lint` and `helm template` have actually been run and verified; `helm
+install` has not been exercised against a live cluster. See the chart's
+`NOTES.txt` for how to reach the gateway (and the caveat that the prover, by
+design, has no reachable route once the NetworkPolicy is enabled).
+
+## Terraform (reference modules, unapplied)
+
+`terraform/gke/` and `terraform/eks/` are minimal reference modules that
+stand up a small cluster and `helm_release` the chart above. Both have been
+`terraform validate`d and `terraform fmt -check`ed against real provider
+schemas (no cloud credentials needed for that); **neither has been
+`apply`d against a real account** -- review cost, IAM scope, and the
+chart's `values.yaml` before doing so yourself. Deliberately does not
+attempt Confidential Space or Nitro Enclaves in this pass -- that is the
+follow-up paper's work, and a half-done enclave integration is worse than
+none.
 
 ## Integrating this into an agentic design
 

@@ -1,7 +1,7 @@
 """Benchmarks for both proof engines + end-to-end gateway latency.
 Outputs: results/benchmarks.csv, results/e2e_latency.csv, results/*.png
 """
-import csv, json, statistics, time
+import csv, json, pathlib, statistics, time
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -12,7 +12,7 @@ from zkgw.rangeproof import prove_range_leq, verify_range_leq
 from zkgw.gateway import (Predicate, PredicateRegistry, AuditLog, ProofGateway,
                           ExecutionAgent, RiskAgent, serialize_proof)
 
-RES = "/home/claude/zk-proof-gateway/results"
+RES = str(pathlib.Path(__file__).parent.parent / "results")
 WIDTHS = [8, 16, 32, 64]
 CTX = {"nonce": "bench", "request_id": "bench", "predicate_id": "p",
        "predicate_version": 1, "requester": "r", "prover": "x", "ts": 0}

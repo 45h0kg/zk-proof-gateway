@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-zkgw-registry
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  governance.pub: {{ .Values.registry.governancePub | quote }}
+  {{- range $filename, $content := .Values.registry.predicates }}
+  {{ $filename }}: |
+{{ $content | indent 4 }}
+  {{- end }}

@@ -1,0 +1,52 @@
+# Sidecar form: the prover shares a pod with a placeholder source-of-truth
+# container, matching the paper's topology A (source-side prover) -- the
+# prover is co-located with the source of truth, not with the gateway. No
+# Service template exposes this pod at all; combined with the deny-all
+# NetworkPolicy (networkpolicy.yaml), the prover has no inbound route
+# except a workload explicitly granted one.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-zkgw-prover
+  labels:
+    app.kubernetes.io/name: zkgw-prover
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: zkgw-prover
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: zkgw-prover
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: source-placeholder
+          image: "{{ .Values.prover.sourcePlaceholder.image.repository }}:{{ .Values.prover.sourcePlaceholder.image.tag }}"
+          command: ["sleep", "infinity"]
+        - name: prover
+          image: "{{ .Values.prover.image.repository }}:{{ .Values.prover.image.tag }}"
+          imagePullPolicy: {{ .Values.prover.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.prover.port }}
+          env:
+            - name: ZKGW_PORT
+              value: "{{ .Values.prover.port }}"
+            - name: ZKGW_SOURCE_VALUE
+              value: "{{ .Values.prover.sourceValue }}"
+            - name: ZKGW_AGENT_ID
+              value: {{ .Values.prover.agentId | quote }}
+          resources:
+            {{- toYaml .Values.prover.resources | nindent 12 }}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 10

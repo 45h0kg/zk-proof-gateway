@@ -1,0 +1,10 @@
+apiVersion: v2
+name: zk-proof-gateway
+description: >-
+  Proof Gateway + prover sidecar for the ZK Proof Gateway prototype
+  (zero-knowledge data minimization for multi-agent AI systems). Gateway
+  verifies range_leq proofs via a Rust Bulletproofs engine; prover is
+  co-located with a placeholder source-of-truth container in one pod.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

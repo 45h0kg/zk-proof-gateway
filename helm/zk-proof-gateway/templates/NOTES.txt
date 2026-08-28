@@ -1,0 +1,27 @@
+ZK Proof Gateway installed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Port-forward the gateway (the prover has no Service at all, and, with
+networkPolicy.enabled={{ .Values.networkPolicy.enabled }}, denies ALL ingress by
+design -- see networkpolicy.yaml):
+
+  kubectl port-forward -n {{ .Release.Namespace }} \
+    svc/{{ .Release.Name }}-zkgw-gateway {{ .Values.gateway.service.port }}:{{ .Values.gateway.service.port }}
+
+From the python/ directory of your checkout, this reaches the gateway side
+of the protocol (deny-by-default checks, audit chain):
+
+  ZKGW_GATEWAY_URL=http://127.0.0.1:{{ .Values.gateway.service.port }} \
+    python3 verify_e2e.py
+
+Note: with the deny-all NetworkPolicy in place, nothing outside the prover's
+own pod can reach it -- including a verifier run from your workstation. To
+exercise the FULL five-scenario flow (including a real proof from the
+prover), either:
+
+  - run the verifier as a Job/Pod inside this namespace (it can then reach
+    the prover by its pod IP even without a Service), or
+  - temporarily set networkPolicy.enabled=false for a debug session and
+    revert afterward.
+
+This mirrors the enforcement checklist in the root README: the prover
+having no reachable route is the point, not an oversight.

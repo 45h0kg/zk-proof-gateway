@@ -1,6 +1,6 @@
 {
- "p50_ms": 1514.1,
- "p95_ms": 1538.4,
+ "p50_ms": 1009.6,
+ "p95_ms": 1016.1,
  "iters": 15,
  "engine": "sigma-bitor-py, 32-bit, in-process"
 }

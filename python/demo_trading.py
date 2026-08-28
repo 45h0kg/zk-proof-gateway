@@ -6,6 +6,7 @@ Governance has published predicate `pretrade_notional_cap` v1:
 The risk agent must establish compliance WITHOUT learning the notional.
 """
 import json
+import pathlib
 from zkgw.primitives import rand_scalar
 from zkgw.curve import G
 from zkgw.gateway import (
@@ -31,7 +32,9 @@ pred = Predicate(
 pred.signature = sign(gov_secret, pred.canonical_bytes())
 registry.publish(pred)
 
-audit = AuditLog("/home/claude/zk-proof-gateway/results/audit_log.jsonl")
+RESULTS = pathlib.Path(__file__).parent.parent / "results"
+RESULTS.mkdir(exist_ok=True)
+audit = AuditLog(str(RESULTS / "audit_log.jsonl"))
 gateway = ProofGateway(registry, audit)
 
 # --- agents ------------------------------------------------------------------

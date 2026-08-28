@@ -1,0 +1,47 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Soundness suite
+        working-directory: python
+        run: python3 tests_soundness.py
+      - name: Agentic protocol E2E (in-process, Python E1 engine)
+        working-directory: python
+        run: python3 verify_e2e.py
+
+  go-rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build zkrp (Rust Bulletproofs engine)
+        working-directory: rust/zkrp
+        run: cargo build --release
+      - name: Build Go gateway/prover services
+        working-directory: go
+        run: |
+          go build -o /tmp/gateway-service ./gatewayservice
+          go build -o /tmp/prover-service ./proverservice
+      - name: Agentic protocol E2E (Go gateway + Go prover, Rust E2 engine)
+        run: |
+          ZKGW_SOURCE_VALUE=735000000 /tmp/prover-service --port 8753 \
+            --zkrp-bin "$GITHUB_WORKSPACE/rust/zkrp/target/release/zkrp" &
+          sleep 1
+          cd python
+          ZKGW_PROVER_URL=http://127.0.0.1:8753 \
+          ZKGW_GATEWAY_CMD="/tmp/gateway-service --zkrp-bin $GITHUB_WORKSPACE/rust/zkrp/target/release/zkrp" \
+            python3 verify_e2e.py

@@ -1,0 +1,85 @@
+# Three-part local demo modeling the paper's trust boundary: prover, gateway,
+# and bootstrap all share one internal-only network; the gateway additionally
+# joins a second, non-internal network solely so its own published port
+# works (see the networks: section below). The prover never joins that
+# second network, so there is no route from the host -- or from the
+# gateway -- to the prover's private value directly; only the proof it
+# produces ever crosses the boundary.
+#
+# Gateway and prover are the Go+Rust stack (go/gatewayservice,
+# go/proverservice, rust/zkrp). Governance predicate signing stays Python
+# (governance_cli.py) -- the bootstrap service below just runs it, unmodified,
+# against a stock python image; it is not part of the request path.
+#
+# Registry and audit are host bind mounts (not anonymous volumes) so the
+# demo can be inspected and grepped directly from the host shell; see
+# docker/README.md for the exact commands.
+services:
+  bootstrap:
+    image: python:3.12-slim
+    working_dir: /app
+    volumes:
+      - ../python:/app:ro
+      - ./.demo-registry:/registry
+      - ./.demo-audit:/audit
+    # Runs as root only for this one-shot init step, to guarantee it can
+    # chmod the freshly bind-mounted host directories regardless of host
+    # uid mapping; the long-running gateway/prover services below run as
+    # their images' non-root 'app' user. Chmods /audit too (even though
+    # bootstrap doesn't write there) so the gateway container can create
+    # the audit log as uid 1000 without a separate host-side pre-step.
+    user: "0:0"
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -e
+        mkdir -p /registry /audit
+        chmod 777 /registry /audit
+        if [ -f /registry/pretrade_notional_cap.v1.json ]; then
+          echo "bootstrap: predicate already registered, skipping"
+          exit 0
+        fi
+        python3 governance_cli.py keygen --out /registry/governance
+        python3 governance_cli.py define \
+          --id pretrade_notional_cap --version 1 --type range_leq \
+          --cap 1000000000 --nbits 32 --unit USD_cents \
+          --owner risk-governance-team \
+          --key /registry/governance.secret --out /registry
+    networks: [internal]
+
+  prover:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.prover
+    environment:
+      ZKGW_SOURCE_VALUE: "735000000"
+      ZKGW_AGENT_ID: "exec-agent-07"
+    networks: [internal]      # no ports: -- never published to the host
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.gateway
+    ports:
+      - "8752:8752"
+    volumes:
+      - ./.demo-registry:/registry:ro
+      - ./.demo-audit:/audit
+    # The gateway needs BOTH networks: "internal" to reach the prover by
+    # its service name for the one-off verifier container (see
+    # docker/README.md), and "public" so the ports: mapping above actually
+    # works -- an `internal: true` network silences port publishing
+    # entirely (Docker requests the binding but never wires it up), which
+    # is why the prover -- internal-only -- must never be given "public".
+    networks: [internal, public]
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+
+networks:
+  internal:
+    internal: true   # no route to the outside world for anyone on this network
+  public: {}          # only the gateway joins this -- lets its published port work

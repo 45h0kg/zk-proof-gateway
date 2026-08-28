@@ -1,17 +1,29 @@
 //! zkrp: Bulletproofs range-proof engine for the ZK Proof Gateway prototype.
 //!
-//! Statement: PoK{(v, r): C = v*B + r*B_blind  AND  v in [0, 2^n)}
-//! For the gateway's `range_leq` predicate (v <= cap) the standard reduction
-//! is proving BOTH v in [0,2^n) and (cap - v) in [0,2^n) over homomorphic
-//! commitments, i.e. the same asymptotics at roughly twice the cost of one
-//! proof (or one 2-aggregate).
+//! Statement for the gateway's `range_leq` predicate: PoK{(v, r): C_v = v*B +
+//! r*B_blind AND 0 <= v <= cap}. Constructed via the standard reduction: let
+//! d = cap - v; prove BOTH v and d lie in [0, 2^n) as ONE 2-aggregate
+//! Bulletproof (same transcript, same asymptotics as a single proof at
+//! roughly double the constraint count). The verifier never trusts a
+//! prover-supplied commitment to d -- it derives C_d = cap*B - C_v itself
+//! homomorphically, exactly mirroring the Python E1 engine's construction
+//! (rangeproof.py). This is what actually enforces the cap; proving `v`
+//! alone fits in `n` bits (the previous version of this file) does not.
 //!
 //! Subcommands:
-//!   prove <nbits> <value>            -> proof+commitment (hex) + timing
-//!   verify <nbits> <proof_hex> <commit_hex> [context]
-//!   bench                            -> JSON micro-benchmarks incl. aggregation
+//!   prove <nbits> <cap> <value> [ctx]
+//!       -> {"proof_hex", "commit_v_hex", "prove_us"} on success.
+//!       -> {"error": "predicate violated"} + nonzero exit if value > cap
+//!          or value/cap do not fit in nbits. Never emits a proof for a
+//!          false statement.
+//!   verify <nbits> <cap> <proof_hex> <commit_v_hex> [ctx]
+//!       -> {"ok", "verify_us"}
+//!   bench  -> JSON micro-benchmarks of the underlying single/aggregate
+//!             range proof primitive (unchanged; not cap-aware, this is
+//!             raw-primitive feasibility data, see HLD.md/RESULTS.md).
 
 use bulletproofs::{BulletproofGens, PedersenGens, RangeProof};
+use curve25519_dalek_ng::ristretto::CompressedRistretto;
 use curve25519_dalek_ng::scalar::Scalar;
 use merlin::Transcript;
 use rand::thread_rng;
@@ -102,45 +114,102 @@ fn bench() {
     println!("}}");
 }
 
+/// cap_point = cap * B, the value-generator, used to homomorphically derive
+/// C_d = cap*B - C_v without ever trusting a prover-supplied d commitment.
+fn cap_point(pc: &PedersenGens, cap: u64) -> curve25519_dalek_ng::ristretto::RistrettoPoint {
+    Scalar::from(cap) * pc.B
+}
+
+fn cmd_prove(nbits: usize, cap: u64, value: u64, ctx: &str) {
+    let d = match cap.checked_sub(value) {
+        Some(d) => d,
+        None => {
+            println!("{{\"error\": \"predicate violated\"}}");
+            std::process::exit(1);
+        }
+    };
+    // Both v and d must fit in nbits for the aggregate range proof to even
+    // be constructible; out-of-width values are also a predicate violation.
+    let max = if nbits >= 64 { u64::MAX } else { (1u64 << nbits) - 1 };
+    if value > max || d > max {
+        println!("{{\"error\": \"predicate violated\"}}");
+        std::process::exit(1);
+    }
+
+    let pc = PedersenGens::default();
+    let bp = BulletproofGens::new(nbits, 2);
+    let mut rng = thread_rng();
+    let r_v = Scalar::random(&mut rng);
+    let r_d = -r_v; // so Commit(v, r_v) + Commit(d, r_d) == cap*B, exactly
+
+    let t0 = Instant::now();
+    let (proof, commits) = RangeProof::prove_multiple(
+        &bp, &pc, &mut transcript(ctx), &[value, d], &[r_v, r_d], nbits,
+    )
+    .expect("prove_multiple");
+    let us = t0.elapsed().as_secs_f64() * 1e6;
+
+    println!(
+        "{{\"proof_hex\": \"{}\", \"commit_v_hex\": \"{}\", \"prove_us\": {:.0}}}",
+        hex::encode(proof.to_bytes()),
+        hex::encode(commits[0].as_bytes()),
+        us
+    );
+}
+
+fn cmd_verify(nbits: usize, cap: u64, proof_hex: &str, commit_v_hex: &str, ctx: &str) {
+    let pc = PedersenGens::default();
+    let bp = BulletproofGens::new(nbits, 2);
+
+    let proof = match RangeProof::from_bytes(&hex::decode(proof_hex).unwrap()) {
+        Ok(p) => p,
+        Err(_) => {
+            println!("{{\"ok\": false, \"verify_us\": 0}}");
+            return;
+        }
+    };
+    let commit_v_bytes = hex::decode(commit_v_hex).unwrap();
+    let commit_v = CompressedRistretto::from_slice(&commit_v_bytes);
+
+    let commit_v_point = match commit_v.decompress() {
+        Some(p) => p,
+        None => {
+            println!("{{\"ok\": false, \"verify_us\": 0}}");
+            return;
+        }
+    };
+    // Derive C_d ourselves -- never trust a prover-supplied d commitment.
+    let commit_d = (cap_point(&pc, cap) - commit_v_point).compress();
+
+    let t0 = Instant::now();
+    let ok = proof
+        .verify_multiple(&bp, &pc, &mut transcript(ctx), &[commit_v, commit_d], nbits)
+        .is_ok();
+    let us = t0.elapsed().as_secs_f64() * 1e6;
+    println!("{{\"ok\": {}, \"verify_us\": {:.0}}}", ok, us);
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         Some("bench") => bench(),
         Some("prove") => {
             let n: usize = args[2].parse().unwrap();
-            let v: u64 = args[3].parse().unwrap();
-            let ctx = args.get(4).cloned().unwrap_or_default();
-            let pc = PedersenGens::default();
-            let bp = BulletproofGens::new(64, 1);
-            let blind = Scalar::random(&mut thread_rng());
-            let t0 = Instant::now();
-            let (proof, commit) =
-                RangeProof::prove_single(&bp, &pc, &mut transcript(&ctx), v, &blind, n)
-                    .expect("prove");
-            let us = t0.elapsed().as_secs_f64() * 1e6;
-            println!(
-                "{{\"proof_hex\": \"{}\", \"commit_hex\": \"{}\", \"prove_us\": {:.0}}}",
-                hex::encode(proof.to_bytes()),
-                hex::encode(commit.as_bytes()),
-                us
-            );
+            let cap: u64 = args[3].parse().unwrap();
+            let v: u64 = args[4].parse().unwrap();
+            let ctx = args.get(5).cloned().unwrap_or_default();
+            cmd_prove(n, cap, v, &ctx);
         }
         Some("verify") => {
             let n: usize = args[2].parse().unwrap();
-            let proof = RangeProof::from_bytes(&hex::decode(&args[3]).unwrap()).unwrap();
-            let commit = curve25519_dalek_ng::ristretto::CompressedRistretto::from_slice(
-                &hex::decode(&args[4]).unwrap(),
-            );
-            let ctx = args.get(5).cloned().unwrap_or_default();
-            let pc = PedersenGens::default();
-            let bp = BulletproofGens::new(64, 1);
-            let t0 = Instant::now();
-            let ok = proof
-                .verify_single(&bp, &pc, &mut transcript(&ctx), &commit, n)
-                .is_ok();
-            let us = t0.elapsed().as_secs_f64() * 1e6;
-            println!("{{\"ok\": {}, \"verify_us\": {:.0}}}", ok, us);
+            let cap: u64 = args[3].parse().unwrap();
+            let proof_hex = &args[4];
+            let commit_v_hex = &args[5];
+            let ctx = args.get(6).cloned().unwrap_or_default();
+            cmd_verify(n, cap, proof_hex, commit_v_hex, &ctx);
         }
-        _ => eprintln!("usage: zkrp bench | prove <n> <v> [ctx] | verify <n> <proof> <commit> [ctx]"),
+        _ => eprintln!(
+            "usage: zkrp bench | prove <nbits> <cap> <value> [ctx] | verify <nbits> <cap> <proof_hex> <commit_v_hex> [ctx]"
+        ),
     }
 }
