@@ -5,7 +5,7 @@ chronological order. See `IMPLEMENTATION_HLD.md`/`IMPLEMENTATION_LLD.md`
 for full architectural detail and `Spec.md`'s status addendum for how this
 relates to the original one-day spec.
 
-## [Unreleased] — security review
+## PR #4 — Security review + design doc refresh
 
 Dedicated security pass over the Go/Docker/Helm/Terraform surface added by
 the three PRs below — not the crypto itself, which the soundness suite
