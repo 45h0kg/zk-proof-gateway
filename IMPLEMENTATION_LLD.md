@@ -79,8 +79,8 @@ for something different, that's noted inline rather than silently dropped.
   11/12-field audit entry shape) so Python's `AuditLog.verify_chain` can
   re-verify a Go-written log unmodified. `New(path)` resumes the hash chain
   from the file's last `entry_hash` if it already has content, rather than
-  truncating — this was a real bug (see §4 below), not a design choice from
-  the start.
+  truncating — this was a real bug (see the P2 section below), not a
+  design choice from the start.
 - **`go/internal/zkctx/zkctx.go`**: `Context` struct + `Canonical()`, a
   fixed-field-order re-encoding that's what actually gets bound into the
   Rust Merlin transcript at both prove and verify time — deliberately *not*
@@ -255,6 +255,70 @@ remains explicit follow-up-paper scope, not attempted here.
 
 ---
 
+## A2A (Agent2Agent) surface
+
+Added to both gateways, on the same HTTP endpoint as the existing
+MCP-shaped methods, sharing one verification chain and one audit/orders
+ledger. See `IMPLEMENTATION_HLD.md` §3 for the architecture; this is the
+file-by-file detail.
+
+- **`go/gatewayservice/main.go`**: `handleToolsCall` (MCP) was refactored
+  so its entire verification chain -- tool/skill lookup, attachment
+  presence + schema validation, context lookup/replay/match, action_ref
+  match, predicate match, proof verification -- lives in one new function,
+  `processGovernedCall(state, toolName, orderRef, zkAttachmentRaw)
+  governedCallOutcome`. `handleToolsCall` now just calls it and formats an
+  MCP result/error; the A2A handler below does the same with a different
+  wire shape. No behavior change for MCP callers -- confirmed by rerunning
+  every existing scenario before adding any A2A code.
+- **`go/gatewayservice/a2a.go`** (new file): `message/send`, `tasks/get`,
+  `tasks/cancel`, and the Agent Card handler. `handleMessageSend` extracts
+  a data part shaped `{"skill", "arguments", "zk_attachment"}` from the
+  incoming `Message` (this shape is this repo's own convention -- A2A
+  deliberately leaves skill-invocation payloads application-defined), runs
+  it through `processGovernedCall`, and returns a `Task` in `completed` or
+  `failed` state. Tasks are stored in `VenueState.tasks` (a new field,
+  swept by the same TTL goroutine that already existed for contexts, for
+  the same resource-exhaustion reason) so `tasks/get` can retrieve them
+  later. `tasks/cancel` always returns an error -- every task here
+  completes synchronously inside `message/send`, so there is never an
+  in-flight task to cancel.
+- **`go/gatewayservice/a2a_test.go`** (new file): unit tests for the pure
+  helpers (`trimDeniedPrefix`, `failedTask`/`completedTask` shape) and the
+  two `handleMessageSend` fast-fail paths (no data part; missing
+  `zk_attachment`, i.e. deny-by-default) that don't require a live
+  registry or `zkrp` binary.
+- **`python/agent_server.py`**: the identical refactor --
+  `process_governed_call(state, tool_name, order_ref, att) -> dict` shares
+  the same chain between `tools/call` (MCP) and the new
+  `handle_message_send` (A2A). `agent_card(port)` returns the Agent Card
+  dict; served at `GET /.well-known/agent.json` alongside the existing
+  `/healthz` route. `VenueState.tasks` is a plain dict, same TTL-free
+  simplicity as the rest of the Python reference implementation (the Go
+  gateway is the one under DoS-hardening scrutiny; see
+  `IMPLEMENTATION_HLD.md` §6 for why that asymmetry is acceptable --
+  `agent_server.py` is never deployed).
+- **`python/verify_e2e.py`**: seven new checks (Agent Card contents,
+  `message/send` ALLOW + notional-absence, deny-by-default, `tasks/get`,
+  `tasks/cancel`-on-terminal-task, shared-ledger) run against whichever
+  gateway backend is under test, immediately after the five MCP scenarios
+  and before the audit-chain checks. Deliberately does *not* re-run every
+  MCP adversarial case through A2A too -- `processGovernedCall`/
+  `process_governed_call` is the single shared implementation already
+  covered by S1-S5, so doing that would test the same code path twice
+  under two names rather than add real coverage; the new checks target
+  only what's actually new (the wire shapes, the Agent Card, task
+  lifecycle, the shared ledger).
+
+Verified: both engines pass all 19 checks (`cargo test`/`go test` unit
+tests plus the full `verify_e2e.py` run), including against the real
+docker-compose stack (rebuilt and rerun for this, not assumed) with both
+required greps for the private value still returning zero hits. Not
+re-verified against a live `kind` cluster -- the P2 section's cluster
+numbers above predate this addition.
+
+---
+
 ## Cross-cutting: what changed vs. `Spec.md`'s literal text
 
 - **Prover/gateway language**: Python as specced for P0, then Go+Rust for
@@ -272,5 +336,5 @@ remains explicit follow-up-paper scope, not attempted here.
 - **NetworkPolicy shape**: as detailed above — deny-all on the prover, not
   an allow-list naming the gateway, because that's what actually matches
   this protocol's call graph.
-- **Everything in §5 of `IMPLEMENTATION_HLD.md`** ("still open"): real
+- **Everything in §6 of `IMPLEMENTATION_HLD.md`** ("still open"): real
   gaps, tracked, not silently dropped.

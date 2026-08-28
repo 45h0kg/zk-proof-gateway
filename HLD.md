@@ -93,7 +93,7 @@ sequenceDiagram
 
 ## 5. Proposed protocol extension (`zk-attach/v0`)
 
-No current agent protocol carries a proof slot; this prototype defines one that fits MCP `tools/call` params or an A2A message part without breaking existing schemas:
+No current agent protocol carries a proof slot; this prototype defines one that fits MCP `tools/call` params or an A2A message part without breaking existing schemas. Both bindings are implemented (`agent_server.py` and `go/gatewayservice` each speak both surfaces on the same HTTP endpoint, sharing one verification chain and one audit/orders ledger underneath):
 
 ```json
 {
@@ -112,6 +112,29 @@ No current agent protocol carries a proof slot; this prototype defines one that 
   }
 }
 ```
+
+The A2A binding carries the identical attachment inside a `Message`'s data part instead of `tools/call` params -- A2A has no native "tool call" concept, so the governed action's name and arguments travel alongside the attachment in the same data part, and the response is a `Task` rather than a JSON-RPC result:
+
+```json
+{
+  "method": "message/send",
+  "params": {
+    "message": {
+      "role": "user", "kind": "message", "messageId": "m-1",
+      "parts": [{
+        "kind": "data",
+        "data": {
+          "skill": "submit_order",
+          "arguments": { "order_ref": "ord-9912" },
+          "zk_attachment": { "schema": "zk-attach/v0", "...": "..." }
+        }
+      }]
+    }
+  }
+}
+```
+
+Discovery differs too: MCP callers learn the governed predicate from `tools/list`'s `x_zk_required` field; A2A callers learn it from the Agent Card served at `GET /.well-known/agent.json`, in the `submit_order` skill's description. Both callers obtain a request context from the same `zk/context` method before proving, regardless of which surface they then call back on.
 
 Semantics: a gateway/middleware verifying the attachment MAY authorize the call without the sensitive argument ever being present; absence of a required attachment for a registered predicate => deny-by-default.
 

@@ -83,12 +83,16 @@ type VenueState struct {
 	mu       sync.Mutex
 	contexts map[string]*ctxEntry
 	orders   []Order
+	tasks    map[string]*taskEntry // A2A task store, see a2a.go
 }
 
 // sweepExpiredContexts runs for the lifetime of the process, periodically
-// evicting contexts older than contextTTL regardless of whether they were
-// ever used -- bounds state.contexts to roughly one TTL window's worth of
-// traffic instead of growing forever.
+// evicting contexts and A2A tasks older than contextTTL -- bounds both
+// maps to roughly one TTL window's worth of traffic instead of growing
+// forever. Tasks complete synchronously in this gateway (proof
+// verification is single-digit milliseconds), so nothing legitimate ever
+// needs a completed task to stay around for 5 minutes; this is purely a
+// resource-exhaustion bound, not a functional requirement.
 func (s *VenueState) sweepExpiredContexts() {
 	ticker := time.NewTicker(contextTTL / 2)
 	defer ticker.Stop()
@@ -98,6 +102,11 @@ func (s *VenueState) sweepExpiredContexts() {
 		for id, entry := range s.contexts {
 			if entry.createdAt.Before(cutoff) {
 				delete(s.contexts, id)
+			}
+		}
+		for id, entry := range s.tasks {
+			if entry.createdAt.Before(cutoff) {
+				delete(s.tasks, id)
 			}
 		}
 		s.mu.Unlock()
@@ -263,6 +272,15 @@ func dispatch(state *VenueState, req rpcRequest) rpcResponse {
 	case "tools/call":
 		return handleToolsCall(state, req)
 
+	// A2A (Agent2Agent) surface -- same verification chain as tools/call
+	// above (processGovernedCall), different wire shape. See a2a.go.
+	case "message/send":
+		return handleMessageSend(state, req)
+	case "tasks/get":
+		return handleTasksGet(state, req)
+	case "tasks/cancel":
+		return handleTasksCancel(state, req)
+
 	case "venue/orders":
 		state.mu.Lock()
 		orders := append([]Order{}, state.orders...)
@@ -274,93 +292,126 @@ func dispatch(state *VenueState, req rpcRequest) rpcResponse {
 	}
 }
 
-func handleToolsCall(state *VenueState, req rpcRequest) rpcResponse {
-	var params toolsCallParams
-	if err := json.Unmarshal(req.Params, &params); err != nil {
-		return rpcError(req.ID, -32602, "invalid params")
-	}
-	want, known := governedTools[params.Name]
+// governedCallOutcome is the protocol-agnostic result of processGovernedCall
+// -- both the MCP (tools/call) and A2A (message/send) handlers format the
+// SAME outcome into their own wire shape, rather than duplicating the
+// verification chain per protocol.
+type governedCallOutcome struct {
+	code             int // 0 == success; otherwise a JSON-RPC-style error code
+	message          string
+	auditEntry       string
+	verifyMs         float64
+	predicateID      string
+	predicateVersion int
+}
+
+// processGovernedCall runs the full deny-by-default verification chain for
+// a governed action, identically regardless of which protocol surface
+// invoked it: tool/skill lookup, attachment presence + schema validation,
+// context lookup/replay/match, action_ref match, predicate match, proof
+// verification. orderRef is whatever action identifier the caller's
+// context was bound to (order_ref for MCP, the same field inside the A2A
+// data part).
+func processGovernedCall(state *VenueState, toolName string, orderRef string, zkAttachmentRaw json.RawMessage) governedCallOutcome {
+	want, known := governedTools[toolName]
 	if !known {
-		return rpcError(req.ID, -32601, fmt.Sprintf("unknown tool: %s", params.Name))
+		return governedCallOutcome{code: -32601, message: fmt.Sprintf("unknown tool: %s", toolName)}
 	}
 
-	if len(params.ZkAttachment) == 0 || string(params.ZkAttachment) == "null" {
-		return rpcError(req.ID, -32031, "denied: governed tool requires zk_attachment (deny-by-default)")
+	if len(zkAttachmentRaw) == 0 || string(zkAttachmentRaw) == "null" {
+		return governedCallOutcome{code: -32031, message: "denied: governed tool requires zk_attachment (deny-by-default)"}
 	}
 	var attRaw map[string]json.RawMessage
-	json.Unmarshal(params.ZkAttachment, &attRaw)
+	json.Unmarshal(zkAttachmentRaw, &attRaw)
 	for _, k := range []string{"schema", "predicate_id", "predicate_version", "context", "proof_b64"} {
 		if _, ok := attRaw[k]; !ok {
-			return rpcError(req.ID, -32032, fmt.Sprintf("denied: attachment missing field '%s'", k))
+			return governedCallOutcome{code: -32032, message: fmt.Sprintf("denied: attachment missing field '%s'", k)}
 		}
 	}
 	var att attachment
-	if err := json.Unmarshal(params.ZkAttachment, &att); err != nil {
-		return rpcError(req.ID, -32032, fmt.Sprintf("denied: malformed attachment (%v)", err))
+	if err := json.Unmarshal(zkAttachmentRaw, &att); err != nil {
+		return governedCallOutcome{code: -32032, message: fmt.Sprintf("denied: malformed attachment (%v)", err)}
 	}
 	if att.Schema != "zk-attach/v0" {
-		return rpcError(req.ID, -32032, "denied: unsupported attachment schema")
+		return governedCallOutcome{code: -32032, message: "denied: unsupported attachment schema"}
 	}
 
 	attCtx, err := zkctx.Parse(att.Context)
 	if err != nil {
-		return rpcError(req.ID, -32032, "denied: malformed attachment context")
+		return governedCallOutcome{code: -32032, message: "denied: malformed attachment context"}
 	}
 
 	state.mu.Lock()
 	entry, ok := state.contexts[attCtx.RequestID]
 	if !ok {
 		state.mu.Unlock()
-		return rpcError(req.ID, -32033, "denied: unknown request context")
+		return governedCallOutcome{code: -32033, message: "denied: unknown request context"}
 	}
 	if entry.used {
 		state.mu.Unlock()
-		return rpcError(req.ID, -32034, "denied: context already used (replay)")
+		return governedCallOutcome{code: -32034, message: "denied: context already used (replay)"}
 	}
 	if attCtx != entry.ctx {
 		state.mu.Unlock()
-		return rpcError(req.ID, -32035, "denied: context does not match issued context")
+		return governedCallOutcome{code: -32035, message: "denied: context does not match issued context"}
 	}
-	var args orderArgs
-	json.Unmarshal(params.Arguments, &args)
-	if entry.ctx.ActionRef != args.OrderRef {
+	if entry.ctx.ActionRef != orderRef {
 		state.mu.Unlock()
-		return rpcError(req.ID, -32036, "denied: attachment action_ref does not match order_ref")
+		return governedCallOutcome{code: -32036, message: "denied: attachment action_ref does not match order_ref"}
 	}
 	entry.used = true // single use, success or failure
 	state.mu.Unlock()
 
 	if att.PredicateID != want.PredicateID || att.PredicateVersion != want.Version {
-		return rpcError(req.ID, -32037, "denied: wrong predicate for this tool")
+		return governedCallOutcome{code: -32037, message: "denied: wrong predicate for this tool"}
 	}
 
-	auditEntry, verifyMs, ok, err := verifyAttachment(state, att, attCtx)
+	auditEntry, verifyMs, ok2, err := verifyAttachment(state, att, attCtx)
 	if err != nil {
 		// Log the real error server-side only -- it can contain internal
 		// detail (subprocess stdout/exit status, file paths) that
 		// shouldn't be echoed back to an untrusted caller over the wire.
 		log.Printf("verification error: %v", err)
-		return rpcError(req.ID, -32038, "denied: verification error")
+		return governedCallOutcome{code: -32038, message: "denied: verification error"}
 	}
-	if !ok {
+	if !ok2 {
 		short := auditEntry
 		if len(short) > 16 {
 			short = short[:16]
 		}
-		return rpcError(req.ID, -32039, fmt.Sprintf("denied: proof invalid (audit %s)", short))
+		return governedCallOutcome{code: -32039, message: fmt.Sprintf("denied: proof invalid (audit %s)", short)}
 	}
 
-	order := Order{OrderRef: args.OrderRef, Symbol: args.Symbol, Side: args.Side, AuditEntry: auditEntry}
+	return governedCallOutcome{
+		code: 0, auditEntry: auditEntry, verifyMs: verifyMs,
+		predicateID: att.PredicateID, predicateVersion: att.PredicateVersion,
+	}
+}
+
+func handleToolsCall(state *VenueState, req rpcRequest) rpcResponse {
+	var params toolsCallParams
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return rpcError(req.ID, -32602, "invalid params")
+	}
+	var args orderArgs
+	json.Unmarshal(params.Arguments, &args)
+
+	outcome := processGovernedCall(state, params.Name, args.OrderRef, params.ZkAttachment)
+	if outcome.code != 0 {
+		return rpcError(req.ID, outcome.code, outcome.message)
+	}
+
+	order := Order{OrderRef: args.OrderRef, Symbol: args.Symbol, Side: args.Side, AuditEntry: outcome.auditEntry}
 	state.mu.Lock()
 	state.orders = append(state.orders, order)
 	state.mu.Unlock()
 
 	return rpcResult(req.ID, map[string]any{
 		"content": []any{map[string]any{"type": "text",
-			"text": fmt.Sprintf("order %s ACCEPTED under %s@v%d", args.OrderRef, att.PredicateID, att.PredicateVersion)}},
+			"text": fmt.Sprintf("order %s ACCEPTED under %s@v%d", args.OrderRef, outcome.predicateID, outcome.predicateVersion)}},
 		"decision":    "ALLOW",
-		"audit_entry": auditEntry,
-		"verify_ms":   round3(verifyMs),
+		"audit_entry": outcome.auditEntry,
+		"verify_ms":   round3(outcome.verifyMs),
 	})
 }
 
@@ -501,6 +552,7 @@ func main() {
 		audit:    audit,
 		zkrp:     zkrpclient.New(*zkrpBin),
 		contexts: map[string]*ctxEntry{},
+		tasks:    map[string]*taskEntry{},
 	}
 	go state.sweepExpiredContexts()
 
@@ -510,6 +562,7 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(data)
 	})
+	mux.HandleFunc("/.well-known/agent.json", agentCardHandler(*port))
 	mux.HandleFunc("/", handleRPC(state))
 
 	addr := fmt.Sprintf("%s:%d", *host, *port)

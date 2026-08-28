@@ -67,7 +67,42 @@ wrote. Governance predicate signing stays Python in both worlds — it is
 never on a request path, and the whole point of hand-rolled Python crypto
 there is that a human can read it without trusting a compiled toolchain.
 
-## 3. rust/zkrp: the cap-enforcement fix
+## 3. A2A (Agent2Agent): the other binding
+
+HLD.md's protocol-extension section always described the envelope as
+fitting "MCP `tools/call` params **or** an A2A message part" — only the
+first half existed until this pass. Both `agent_server.py` and
+`go/gatewayservice` now speak the real A2A wire format (JSON-RPC methods
+`message/send`/`tasks/get`/`tasks/cancel`, an Agent Card at
+`GET /.well-known/agent.json`) on the exact same HTTP endpoint as the MCP
+methods, sharing one verification chain, one audit log, and one orders
+ledger:
+
+```mermaid
+flowchart LR
+    subgraph shared["shared underneath either surface"]
+      CTX["zk/context"] --> VER["processGovernedCall /\nprocess_governed_call"]
+      VER --> AUD[(audit log)]
+      VER --> LED[(orders ledger)]
+    end
+    MCP["tools/call\n(params.zk_attachment)"] --> VER
+    A2A["message/send\n(Message data part)"] --> VER
+    CARD["GET /.well-known/agent.json"] -.discovery, not verified.-> A2A
+    LIST["tools/list\nx_zk_required"] -.discovery, not verified.-> MCP
+```
+
+Since A2A has no native "tool call" concept, the governed action's name
+and arguments travel inside the same Message data part as the
+`zk_attachment` itself: `{"skill": "submit_order", "arguments": {...},
+"zk_attachment": {...}}` -- a convention of this repo, not part of the A2A
+spec (which deliberately leaves the invocation payload
+application-defined). Tasks complete synchronously (proof verification is
+single-digit-to-low-hundreds of milliseconds depending on engine), so
+`tasks/cancel` always errors with "already in terminal state" -- there is
+never an in-flight task to actually cancel. See `HLD.md` section 5 for the
+exact wire shapes side by side.
+
+## 4. rust/zkrp: the cap-enforcement fix
 
 The Rust engine existed before this effort but only proved "`v` fits in
 `n` bits" — no `cap` parameter anywhere. `cmd_prove`/`cmd_verify` now
@@ -82,7 +117,7 @@ directly; 7 `cargo test` cases cover the honest path and every adversarial
 one (tamper, wrong context, lowered cap, over-cap refusal, bit-width
 violation, malformed input).
 
-## 4. Deployment topology
+## 5. Deployment topology
 
 ```mermaid
 flowchart TB
@@ -141,7 +176,7 @@ to each platform's idiom:
   a remote, encrypted backend is recommended for anything beyond a
   disposable local run.
 
-## 5. Security posture: what's hardened, what's still open
+## 6. Security posture: what's hardened, what's still open
 
 Hardened (see `CHANGELOG.md` for specifics):
 - Governance secret key never reaches the gateway/prover's filesystem in
@@ -190,7 +225,7 @@ Still open, explicitly deferred rather than silently dropped:
   production-readiness gaps, all lower-urgency than the items above, not
   yet scheduled.
 
-## 6. Verification record
+## 7. Verification record
 
 Every claim above has actually been run, not just reasoned about:
 

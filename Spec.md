@@ -1,12 +1,12 @@
 SPEC: One-Day Containerization — ZK Proof Gateway
 
-Target: executable by Claude Code, spec to PR, in one working day. Context: supports a Black Hat CFP submission due Monday evening.
+Target: executable by Claude Code, spec to PR, in one working day.
 
 PRIORITY ORDER (do in this sequence; stop when time runs out)
 
 P0 splits the prover into a real network service — required for any honest containerization, and it makes the architecture match the paper. P1 Dockerfiles + compose — makes the README's deployment claims real. P2 Helm chart + NetworkPolicy — the deny-by-default story, deployable. P3 Terraform — stretch only. Skip without guilt if the day is gone.
 
-Everything below P1 is optional for the CFP. P0 and P1 are the ones that matter, because they make the demo video reproducible by anyone.
+Everything below P1 is optional. P0 and P1 are the ones that matter, because they make the demo video reproducible by anyone.
 
 CURRENT STATE (do not break these)
 
@@ -191,3 +191,9 @@ set-membership/boolean-composition predicate types remain the deliberately
 deferred stub the original README already called them, for the same reason
 P3 skips Confidential Space/Nitro Enclaves -- a half-finished new
 cryptographic construction under time pressure is worse than an honest gap.
+
+A fourth pass, also beyond this spec's original scope, added the other
+protocol binding this repo's own design docs had always described but
+never implemented: A2A (Agent2Agent), alongside the existing MCP-shaped
+surface, on both gateways, sharing one verification chain and ledger with
+MCP. See `CHANGELOG.md`'s PR #6 entry.
