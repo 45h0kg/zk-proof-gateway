@@ -54,4 +54,9 @@ spec:
           configMap:
             name: {{ .Release.Name }}-zkgw-registry
         - name: audit
+          {{- if .Values.gateway.audit.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-zkgw-audit
+          {{- else }}
           emptyDir: {}
+          {{- end }}

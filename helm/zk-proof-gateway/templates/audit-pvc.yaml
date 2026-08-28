@@ -1,0 +1,21 @@
+{{- if .Values.gateway.audit.persistence.enabled }}
+# The audit log's non-repudiation property depends on it actually
+# persisting across pod restarts/rescheduling -- an emptyDir (the previous
+# version of this chart) silently loses the entire trail whenever the
+# gateway pod moves. This PVC is what the gateway deployment mounts at
+# /audit instead.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-zkgw-audit
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.gateway.audit.persistence.storageClassName }}
+  storageClassName: {{ .Values.gateway.audit.persistence.storageClassName | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.gateway.audit.persistence.size }}
+{{- end }}

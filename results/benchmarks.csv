@@ -1,9 +1,9 @@
 engine,nbits,proof_bytes,prove_ms_med,verify_ms_med
-sigma-bitor-py,8,7091,120.8,121.9
-sigma-bitor-py,16,14146,242.2,244.9
-sigma-bitor-py,32,28252,484.6,488.3
-sigma-bitor-py,64,56462,968.9,984.4
-bulletproofs-rs,8,480,1.02,0.22
-bulletproofs-rs,16,544,1.82,0.32
-bulletproofs-rs,32,608,3.32,0.51
-bulletproofs-rs,64,672,6.27,0.89
+sigma-bitor-py,8,7092,125.5,126.3
+sigma-bitor-py,16,14145,243.3,244.6
+sigma-bitor-py,32,28246,488.4,496.3
+sigma-bitor-py,64,56468,971.3,989.0
+bulletproofs-rs,8,480,1.01,0.22
+bulletproofs-rs,16,544,1.81,0.33
+bulletproofs-rs,32,608,3.26,0.52
+bulletproofs-rs,64,672,6.22,0.92
