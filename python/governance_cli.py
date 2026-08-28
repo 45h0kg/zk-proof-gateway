@@ -93,12 +93,15 @@ def cmd_define(args):
     print(f"wrote signed predicate: {path}")
 
 
-def load_predicate_file(path: str) -> Predicate:
-    doc = json.loads(pathlib.Path(path).read_text())
+def parse_predicate_doc(doc: dict) -> Predicate:
     p = doc["predicate"]
     pred = Predicate(p["predicate_id"], p["version"], p["ptype"], p["params"], p["owner"])
     pred.signature = (int(doc["signature"]["e"], 16), int(doc["signature"]["z"], 16))
     return pred
+
+
+def load_predicate_file(path: str) -> Predicate:
+    return parse_predicate_doc(json.loads(pathlib.Path(path).read_text()))
 
 
 def cmd_verify(args):

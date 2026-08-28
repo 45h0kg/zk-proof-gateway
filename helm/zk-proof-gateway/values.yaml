@@ -1,0 +1,52 @@
+# Default values for zk-proof-gateway.
+
+gateway:
+  image:
+    repository: zkgw-gateway
+    tag: local
+    pullPolicy: IfNotPresent
+  service:
+    port: 8752
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 200m, memory: 128Mi}
+
+prover:
+  image:
+    repository: zkgw-prover
+    tag: local
+    pullPolicy: IfNotPresent
+  port: 8753
+  # DEMO ONLY: the value the prover proves about. Production reads from a
+  # real OMS/position-service adapter behind read_source_value()
+  # (python/prover_service.py) / readSourceValue() (go/proverservice) --
+  # never set a real notional here.
+  sourceValue: 735000000
+  agentId: exec-agent-07
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 200m, memory: 128Mi}
+  # Placeholder container standing in for the real source-of-truth service
+  # (OMS/position service) this pod is co-located with, per the paper's
+  # topology A (source-side prover). Swap for your actual source workload's
+  # image; the prover only needs network-local access to it, not a specific
+  # image.
+  sourcePlaceholder:
+    image:
+      repository: busybox
+      tag: "1.36"
+
+# Registry contents: the signed predicate file(s) and the governance public
+# key, mounted read-only into the gateway from a ConfigMap. Populate with
+# `governance_cli.py define`'s output and `governance_cli.py keygen`'s
+# public key -- generated OUTSIDE the cluster, the private key never touches
+# this values file or the chart.
+registry:
+  governancePub: ""   # contents of governance.pub (hex, one line)
+  predicates: {}        # map: filename -> full contents of a signed predicate JSON file
+    # example:
+    # pretrade_notional_cap.v1.json: |
+    #   {"predicate": {...}, "signature": {...}}
+
+networkPolicy:
+  enabled: true

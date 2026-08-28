@@ -1,0 +1,37 @@
+# Proof Gateway image: Go HTTP/JSON-RPC service (go/gatewayservice) verifying
+# proofs via the Rust Bulletproofs engine (rust/zkrp), invoked as a
+# subprocess. Governance predicate signing stays Python (governance_cli.py,
+# run outside this image -- see docker-compose.yml's bootstrap service).
+
+FROM rust:1-slim-bookworm AS rust-builder
+WORKDIR /src
+COPY rust/zkrp/ ./rust/zkrp/
+WORKDIR /src/rust/zkrp
+RUN cargo build --release
+
+FROM golang:1.23-bookworm AS go-builder
+WORKDIR /src/go
+COPY go/ ./
+ENV CGO_ENABLED=0
+RUN go build -o /out/gateway-service ./gatewayservice
+
+FROM debian:bookworm-slim
+RUN useradd --create-home --uid 1000 app \
+ && mkdir -p /registry /audit \
+ && chown -R app:app /registry /audit
+COPY --from=rust-builder /src/rust/zkrp/target/release/zkrp /usr/local/bin/zkrp
+COPY --from=go-builder /out/gateway-service /usr/local/bin/gateway-service
+
+USER app
+ENV ZKGW_PORT=8752 \
+    ZKGW_REGISTRY=/registry \
+    ZKGW_GOV_PUB=/registry/governance.pub \
+    ZKGW_AUDIT=/audit/audit_log.jsonl \
+    ZKGW_ZKRP_BIN=/usr/local/bin/zkrp
+
+VOLUME ["/audit"]
+
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
+  CMD sh -c '/usr/local/bin/gateway-service --healthcheck --port "$ZKGW_PORT"'
+
+ENTRYPOINT ["sh", "-c", "exec /usr/local/bin/gateway-service --host 0.0.0.0 --port \"$ZKGW_PORT\" --registry \"$ZKGW_REGISTRY\" --gov-pub \"$ZKGW_GOV_PUB\" --audit \"$ZKGW_AUDIT\" --zkrp-bin \"$ZKGW_ZKRP_BIN\""]

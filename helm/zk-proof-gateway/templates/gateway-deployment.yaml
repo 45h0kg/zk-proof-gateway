@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-zkgw-gateway
+  labels:
+    app.kubernetes.io/name: zkgw-gateway
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: zkgw-gateway
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: zkgw-gateway
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: gateway
+          image: "{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag }}"
+          imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.gateway.service.port }}
+          env:
+            - name: ZKGW_PORT
+              value: "{{ .Values.gateway.service.port }}"
+            - name: ZKGW_REGISTRY
+              value: /registry
+            - name: ZKGW_GOV_PUB
+              value: /registry/governance.pub
+            - name: ZKGW_AUDIT
+              value: /audit/audit_log.jsonl
+          volumeMounts:
+            - name: registry
+              mountPath: /registry
+              readOnly: true
+            - name: audit
+              mountPath: /audit
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: registry
+          configMap:
+            name: {{ .Release.Name }}-zkgw-registry
+        - name: audit
+          emptyDir: {}

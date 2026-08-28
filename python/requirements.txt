@@ -1,0 +1,6 @@
+# Core library and services (zkgw/, agent_server.py, prover_service.py,
+# governance_cli.py) are stdlib-only and need nothing from this file.
+# The gateway and prover container images do not install this file.
+# Only bench.py (benchmark charts) needs these.
+matplotlib>=3.8
+numpy>=1.26

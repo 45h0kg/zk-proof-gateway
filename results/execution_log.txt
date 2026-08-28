@@ -1,16 +1,17 @@
 ===============================================================
  ZK PROOF GATEWAY - FULL REPRODUCTION RUN
- 2026-08-20 17:50:24 UTC
+ 2026-08-28 19:46:42 UTC
 ===============================================================
 --- ENVIRONMENT ---
-Linux vm 6.18.44-fc-v21 #1 SMP PREEMPT_DYNAMIC @0 x86_64 x86_64 x86_64 GNU/Linux
-model name	: Intel(R) Xeon(R) Processor @ 2.10GHz
-vCPUs: 1
-MemTotal:        4093836 kB
-Python 3.12.3
+Darwin Mac 25.6.0 Darwin Kernel Version 25.6.0: Fri Jul 31 19:16:36 PDT 2026; root:xnu-12377.161.14~5/RELEASE_ARM64_T6030 arm64
+grep: /proc/cpuinfo: No such file or directory
+experiments/run_all.sh: line 22: nproc: command not found
+vCPUs: 
+grep: /proc/meminfo: No such file or directory
+Python 3.9.6
 
 --- STAGE 0: GOVERNANCE WORKFLOW (keygen, sign predicate, verify) ---
-start: 17:50:24.600 UTC
+start: 19:46:42.3N UTC
 wrote /tmp/zkgw_keys/governance.secret (keep private; chmod 600 applied)
 wrote /tmp/zkgw_keys/governance.pub  (distribute to gateways out of band)
 wrote signed predicate: /tmp/zkgw_registry/pretrade_notional_cap.v1.json
@@ -18,7 +19,7 @@ wrote signed predicate: /tmp/zkgw_registry/pretrade_notional_cap.v1.json
 stage 0 exit: 0
 
 --- STAGE 1: ADVERSARIAL SOUNDNESS SUITE (11 checks) ---
-start: 17:50:24.780 UTC
+start: 19:46:42.3N UTC
 T0  honest baseline
   [PASS] valid proof verifies: expected True, got True
 T1  malicious prover with value > cap
@@ -43,7 +44,7 @@ SOUNDNESS SUITE: 11/11 checks passed
 stage 1 exit: 0
 
 --- STAGE 2: END-TO-END TRADING DEMO ---
-start: 17:50:47.022 UTC
+start: 19:47:02.3N UTC
 ------------------------------------------------------------------------
 SCENARIO: exec-agent-07 requests pre-trade clearance from risk-agent-01
           private notional = $ 7,350,000.00  (cap $10,000,000.00)
@@ -55,19 +56,19 @@ WIRE MESSAGE (proof envelope attached to the tool call / handoff):
   "predicate_version": 1,
   "engine": "bitor-sigma-secp256k1-py",
   "context": {
-    "request_id": "4c3294ab1baa4e27",
-    "nonce": "dbc1176dd6302123f750cc732455031b",
+    "request_id": "7f94311d0a27f26b",
+    "nonce": "524b2ba4835ca3cad8b08e39ea1f863d",
     "action_ref": "ord-9912",
     "predicate_id": "pretrade_notional_cap",
     "predicate_version": 1,
     "requester": "risk-agent-01",
     "prover": "exec-agent-07",
-    "ts": 1787248247
+    "ts": 1787946422
   },
-  "proof_b64": "eyJuYml0cyI6MzIsIkN2IjpbIjAzNmFjOTMyZWZhZGQ5YzM2... (37672 b64 chars)"
+  "proof_b64": "eyJuYml0cyI6MzIsIkN2IjpbIjAyZDgwYzVlNjMwZmNlOTZj... (37680 b64 chars)"
 }
 ------------------------------------------------------------------------
-DECISION: ALLOW   (prove 534 ms | verify 572 ms | audit entry 4ac07b99629ea5a2...)
+DECISION: ALLOW   (prove 485 ms | verify 523 ms | audit entry 9018ceed22e4200f...)
 audit chain intact: True
 ------------------------------------------------------------------------
 WHAT CROSSED THE AGENT BOUNDARY: predicate id+version, request context,
@@ -80,55 +81,56 @@ NEGATIVE SCENARIO: agent with notional $12.5M (> cap) tries to comply
 stage 2 exit: 0
 
 --- STAGE 3: PYTHON ENGINE + E2E BENCHMARKS ---
-start: 17:50:48.359 UTC
-{'engine': 'sigma-bitor-py', 'nbits': 8, 'proof_bytes': 7090, 'prove_ms_med': 132.2, 'verify_ms_med': 137.7}
-{'engine': 'sigma-bitor-py', 'nbits': 16, 'proof_bytes': 14145, 'prove_ms_med': 264.1, 'verify_ms_med': 276.1}
-{'engine': 'sigma-bitor-py', 'nbits': 32, 'proof_bytes': 28255, 'prove_ms_med': 533.2, 'verify_ms_med': 543.8}
-{'engine': 'sigma-bitor-py', 'nbits': 64, 'proof_bytes': 56461, 'prove_ms_med': 1067.6, 'verify_ms_med': 1103.8}
-e2e: {'p50_ms': 1110.0, 'p95_ms': 1125.9, 'iters': 15, 'engine': 'sigma-bitor-py, 32-bit, in-process'}
+start: 19:47:03.3N UTC
+{'engine': 'sigma-bitor-py', 'nbits': 8, 'proof_bytes': 7094, 'prove_ms_med': 120.7, 'verify_ms_med': 121.4}
+{'engine': 'sigma-bitor-py', 'nbits': 16, 'proof_bytes': 14149, 'prove_ms_med': 241.4, 'verify_ms_med': 243.4}
+{'engine': 'sigma-bitor-py', 'nbits': 32, 'proof_bytes': 28253, 'prove_ms_med': 482.3, 'verify_ms_med': 485.7}
+{'engine': 'sigma-bitor-py', 'nbits': 64, 'proof_bytes': 56461, 'prove_ms_med': 964.8, 'verify_ms_med': 979.1}
+e2e: {'p50_ms': 1009.6, 'p95_ms': 1016.1, 'iters': 15, 'engine': 'sigma-bitor-py, 32-bit, in-process'}
 charts written
 stage 3 exit: 0
 
 --- STAGE 4: RUST BULLETPROOFS BUILD + BENCH ---
-start: 17:51:34.734 UTC
-   Compiling hex v0.4.3
-   Compiling zkrp v0.1.0 (/home/claude/repo/zk-proof-gateway/rust/zkrp)
-    Finished release [optimized] target(s) in 1m 20s
+start: 19:47:44.3N UTC
 {
   "engine": "bulletproofs-dalek-ristretto255 (rust 1.75, opt3+lto)",
   "single": [
-    {"nbits": 8, "proof_bytes": 480, "prove_us_med": 1891, "verify_us_med": 423},
-    {"nbits": 16, "proof_bytes": 544, "prove_us_med": 3273, "verify_us_med": 619},
-    {"nbits": 32, "proof_bytes": 608, "prove_us_med": 6171, "verify_us_med": 1025},
-    {"nbits": 64, "proof_bytes": 672, "prove_us_med": 11455, "verify_us_med": 1781}
+    {"nbits": 8, "proof_bytes": 480, "prove_us_med": 1035, "verify_us_med": 220},
+    {"nbits": 16, "proof_bytes": 544, "prove_us_med": 1815, "verify_us_med": 315},
+    {"nbits": 32, "proof_bytes": 608, "prove_us_med": 3301, "verify_us_med": 502},
+    {"nbits": 64, "proof_bytes": 672, "prove_us_med": 6243, "verify_us_med": 878}
   ],
   "aggregated_64bit": [
-    {"m": 1, "proof_bytes": 672, "prove_us_med": 12104, "verify_us_med": 1798},
-    {"m": 2, "proof_bytes": 736, "prove_us_med": 24261, "verify_us_med": 2878},
-    {"m": 4, "proof_bytes": 800, "prove_us_med": 44440, "verify_us_med": 4346},
-    {"m": 8, "proof_bytes": 864, "prove_us_med": 85500, "verify_us_med": 7432},
-    {"m": 16, "proof_bytes": 928, "prove_us_med": 173011, "verify_us_med": 13660}
+    {"m": 1, "proof_bytes": 672, "prove_us_med": 6232, "verify_us_med": 876},
+    {"m": 2, "proof_bytes": 736, "prove_us_med": 12133, "verify_us_med": 1510},
+    {"m": 4, "proof_bytes": 800, "prove_us_med": 23549, "verify_us_med": 2484},
+    {"m": 8, "proof_bytes": 864, "prove_us_med": 46314, "verify_us_med": 4352},
+    {"m": 16, "proof_bytes": 928, "prove_us_med": 89844, "verify_us_med": 7687}
   ]
 }
 stage 4 exit: 0
 
---- STAGE 5: RUST ADVERSARIAL CHECKS ---
-start: 17:53:01.515 UTC
-valid proof:    {"ok": true, "verify_us": 1173}
-tampered proof: {"ok": false, "verify_us": 219}
-wrong context:  {"ok": false, "verify_us": 1090}
+--- STAGE 5: RUST ADVERSARIAL CHECKS (range_leq: cap 1000000000, 32 bits) ---
+start: 19:47:46.3N UTC
+valid proof:        {"ok": true, "verify_us": 912}
+tampered proof:     {"ok": false, "verify_us": 131}
+wrong context:      {"ok": false, "verify_us": 912}
+cap lowered at verify: {"ok": false, "verify_us": 913}
+honest prover refuses over-cap value ($12.5M > $1B cap): {"error": "predicate violated"}
+(nonzero exit above is expected -- the prover must refuse)
 
---- STAGE 6: AGENTIC PROTOCOL E2E (zk-attach/v0 over JSON-RPC) ---
-start: 17:53:01.543 UTC
+--- STAGE 6: AGENTIC PROTOCOL E2E (zk-attach/v0 over JSON-RPC, Python E1 engine) ---
+start: 19:47:46.3N UTC
+mode: IN-PROCESS  gateway=/Library/Developer/CommandLineTools/usr/bin/python3 agent_server.py
   [PASS] tools/list declares zk requirement
 S1  compliant order with valid proof
-  [PASS] ALLOW decision  (verify 571.004 ms)
+  [PASS] ALLOW decision  (verify 519.093 ms)
   [PASS] notional absent from every wire byte
   [PASS] order on venue ledger
 S2  governed call without attachment
   [PASS] denied by default
 S3  tampered proof bytes
-  [PASS] tampered proof denied  (denied: proof invalid (audit 32cadbd02173c9f2))
+  [PASS] tampered proof denied  (denied: proof invalid (audit 261b39d35835e7d0))
 S4  replay of a valid attachment for a different order
   [PASS] cross-order replay denied
 S5  notional above cap ($12.5M)
@@ -142,4 +144,29 @@ AUDIT  hash chain and recorded outcomes
 AGENTIC PROTOCOL E2E: 12/12 checks passed
 stage 6 exit: 0
 
-=== RUN COMPLETE: 2026-08-20 17:53:04 UTC ===
+--- STAGE 7: AGENTIC PROTOCOL E2E (Go gateway + Go prover, Rust Bulletproofs E2 engine) ---
+start: 19:47:50.3N UTC
+mode: NETWORKED (prover=http://127.0.0.1:8793)  gateway=/tmp/zkgw-gateway-service --zkrp-bin /Users/ash/Documents/console/code/zk-proof-gateway/rust/zkrp/target/release/zkrp
+  [PASS] tools/list declares zk requirement
+S1  compliant order with valid proof
+  [PASS] ALLOW decision  (verify 5.097 ms)
+  [PASS] notional absent from every wire byte
+  [PASS] order on venue ledger
+S2  governed call without attachment
+  [PASS] denied by default
+S3  tampered proof bytes
+  [PASS] tampered proof denied  (denied: proof invalid (audit cd488265818c2c3f))
+S4  replay of a valid attachment for a different order
+  [PASS] cross-order replay denied
+S5  predicate cap set below the prover's configured value
+  [PASS] honest prover refuses out-of-policy value
+AUDIT  hash chain and recorded outcomes
+  [PASS] audit chain verifies
+  [PASS] S1 recorded as PASS
+  [PASS] S3 recorded as FAIL
+  [PASS] no notional in any audit entry
+
+AGENTIC PROTOCOL E2E: 12/12 checks passed
+stage 7 exit: 0
+
+=== RUN COMPLETE: 2026-08-28 19:47:51 UTC ===

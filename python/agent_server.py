@@ -155,6 +155,7 @@ def handle(state: VenueState, req: dict) -> dict:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8752)
+    ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--registry", required=True)
     ap.add_argument("--gov-pub", required=True)
     ap.add_argument("--audit", required=True)
@@ -162,6 +163,18 @@ def main():
     state = VenueState(args.registry, args.gov_pub, args.audit)
 
     class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/healthz":
+                data = json.dumps({"status": "ok"}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
         def do_POST(self):
             body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
             try:
@@ -178,8 +191,8 @@ def main():
         def log_message(self, *a):  # quiet
             pass
 
-    print(f"execution-venue listening on 127.0.0.1:{args.port}", flush=True)
-    HTTPServer(("127.0.0.1", args.port), H).serve_forever()
+    print(f"execution-venue listening on {args.host}:{args.port}", flush=True)
+    HTTPServer((args.host, args.port), H).serve_forever()
 
 
 if __name__ == "__main__":
