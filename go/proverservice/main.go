@@ -30,6 +30,11 @@ import (
 
 const engineName = "bulletproofs-ristretto255"
 
+// maxBodyBytes bounds request bodies well above any legitimate /prove
+// request -- without a cap, decoding an attacker-controlled body of
+// unbounded size is a trivial memory-exhaustion DoS.
+const maxBodyBytes = 1 << 20 // 1 MiB
+
 // readSourceValue: demo source of the private value, env var
 // ZKGW_SOURCE_VALUE (cents). Production: replace with a call into a real
 // OMS/position-service adapter; keep the signature (returns int64 cents,
@@ -84,7 +89,7 @@ func handleProve(client *zkrpclient.Client) http.HandlerFunc {
 			return
 		}
 		var req proveRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("bad request: %v", err)})
 			return
 		}

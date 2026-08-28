@@ -20,31 +20,39 @@ services:
     working_dir: /app
     volumes:
       - ../python:/app:ro
+      - ./.demo-keys:/keys
       - ./.demo-registry:/registry
       - ./.demo-audit:/audit
-    # Runs as root only for this one-shot init step, to guarantee it can
-    # chmod the freshly bind-mounted host directories regardless of host
-    # uid mapping; the long-running gateway/prover services below run as
-    # their images' non-root 'app' user. Chmods /audit too (even though
-    # bootstrap doesn't write there) so the gateway container can create
-    # the audit log as uid 1000 without a separate host-side pre-step.
+    # Runs as root only for this one-shot init step, so it can chown the
+    # freshly bind-mounted /audit directory regardless of host uid mapping
+    # (the long-running gateway/prover services below run as their images'
+    # non-root 'app' user, uid 1000, and need write access to create the
+    # audit file). /registry needs no permission changes: governance_cli.py
+    # writes the predicate JSON with default (world-readable) permissions,
+    # which a read-only bind mount can already read regardless of owner.
     user: "0:0"
     entrypoint: ["sh", "-c"]
     command:
       - |
         set -e
-        mkdir -p /registry /audit
-        chmod 777 /registry /audit
+        mkdir -p /keys /registry /audit
+        chown -R 1000:1000 /audit
         if [ -f /registry/pretrade_notional_cap.v1.json ]; then
           echo "bootstrap: predicate already registered, skipping"
           exit 0
         fi
-        python3 governance_cli.py keygen --out /registry/governance
+        # governance.secret is written ONLY to /keys, which is never mounted
+        # into the gateway or prover containers below -- keeping the
+        # governance signing key off agent hosts, per the root README's
+        # enforcement checklist. Only the public key and the signed
+        # predicate (both non-sensitive) go into /registry.
+        python3 governance_cli.py keygen --out /keys/governance
         python3 governance_cli.py define \
           --id pretrade_notional_cap --version 1 --type range_leq \
           --cap 1000000000 --nbits 32 --unit USD_cents \
           --owner risk-governance-team \
-          --key /registry/governance.secret --out /registry
+          --key /keys/governance.secret --out /registry
+        cp /keys/governance.pub /registry/governance.pub
     networks: [internal]
 
   prover:

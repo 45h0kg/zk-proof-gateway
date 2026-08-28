@@ -25,7 +25,16 @@ resource "google_container_node_pool" "zkgw_nodes" {
 
   node_config {
     machine_type = var.machine_type
-    oauth_scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+    # Least-privilege node scopes, not the full cloud-platform scope: only
+    # what a node actually needs to pull images and ship its own telemetry.
+    # Broader access (if the workload ever needs to call other GCP APIs)
+    # should go through Workload Identity on the pod's own service account,
+    # not the node's.
+    oauth_scopes = [
+      "https://www.googleapis.com/auth/devstorage.read_only",
+      "https://www.googleapis.com/auth/logging.write",
+      "https://www.googleapis.com/auth/monitoring",
+    ]
   }
 }
 

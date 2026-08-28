@@ -136,3 +136,57 @@ No secrets in the repo. .gitignore already excludes python/keys/ and python/regi
 Add a CI workflow .github/workflows/ci.yml that runs tests_soundness.py and verify_e2e.py on push. Cheap, and a green badge on the README is worth real credibility to a reviewer.
 Update experiments/run_all.sh only if needed; do not break the six-stage log.
 PR description must state exactly what was verified by running versus what was only linted/rendered. No claims of deployment that did not happen.
+
+================================================================
+STATUS ADDENDUM (post-implementation — see CHANGELOG.md for the PR-by-PR
+record and IMPLEMENTATION_HLD.md / IMPLEMENTATION_LLD.md for full detail)
+================================================================
+
+P0, P1, P2, and P3 are all done and merged to main. One deliberate
+deviation from the text above, decided mid-flight with the requester, not
+unilaterally: partway through P0, the prover/gateway network services were
+redirected from "containerize the Python reference engine" to "the
+network-facing path should be fast, not just correct." The result is a
+second implementation of P0's exact HTTP contract, in Go, proving via a
+Rust Bulletproofs engine (rust/zkrp, which needed a real bug fixed first --
+it only proved bit-width membership, not actual cap enforcement) instead
+of the Python Sigma-OR engine. python/prover_service.py and
+python/agent_server.py (P0 as originally specced) both still exist,
+unremoved, as the paper's E1 reference implementation; they are simply not
+what P1/P2/P3 containerize and deploy. Verification latency dropped from
+~500ms to single-digit milliseconds as a result.
+
+Three follow-on passes went beyond this spec's literal scope, at the
+requester's explicit ask, after P0-P3 landed:
+1. Unit tests for the pieces that previously only had end-to-end coverage
+   (the Rust cap-enforcement logic, the Go Schnorr-signature replication,
+   the Go audit hash chain), plus a second, gateway-facing NetworkPolicy
+   as defense-in-depth alongside the prover's deny-all one.
+2. A real `kind` cluster run of the Helm chart -- this spec's own P2
+   acceptance criteria allowed "template rendering is sufficient" if no
+   cluster was available, but one became available and installing for
+   real caught two genuine bugs (a Helm YAML/float-formatting trap that
+   broke the prover's configured value, and an audit log that silently
+   lost its entire history on every pod restart -- the PersistentVolumeClaim
+   this pass added would have been necessary-but-not-sufficient without
+   also fixing that second bug).
+2b. Durable audit storage (PVC in Helm, corrected truncate-on-restart
+   behavior in both the Go and Python audit-log implementations).
+3. A dedicated security review of everything P0-P3 added (not just the
+   crypto, which the soundness suite already covered): found and fixed a
+   real governance-key exposure in the Docker Compose deployment (the
+   secret was reachable inside the gateway container's mounted
+   filesystem, contradicting this repo's own "keep the governance key off
+   agent hosts" rule), two DoS-shaped gaps in the Go HTTP servers
+   (unbounded request bodies, an unbounded in-memory context map), an
+   information-disclosure issue (internal subprocess errors echoed into
+   caller-facing JSON-RPC responses), and IAM over-scoping in the GKE
+   Terraform module.
+
+Explicitly still open, not attempted: transport authentication (mTLS)
+between callers and gateway/prover -- both currently speak plain HTTP;
+HTTP server timeouts and graceful shutdown on the Go services; and
+set-membership/boolean-composition predicate types remain the deliberately
+deferred stub the original README already called them, for the same reason
+P3 skips Confidential Space/Nitro Enclaves -- a half-finished new
+cryptographic construction under time pressure is worse than an honest gap.

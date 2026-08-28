@@ -83,7 +83,7 @@ sequenceDiagram
     GW->>GW: load predicate, verify governance signature
     GW->>EA: context {nonce, request_id, predicate id@v, ids, ts}
     EA->>SRC: fetch notional (stays inside trust cell)
-    EA->>EA: commit C_v; prove v <= cap bound to context
+    EA->>EA: commit C_v; prove v ≤ cap bound to context
     EA-->>GW: envelope {zk-attach/v0, C_v, proof}
     GW->>GW: verify (registry cap, context transcript)
     GW->>AUD: append {commitment, proof hash, PASS, ids} -> entry_hash

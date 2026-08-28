@@ -13,6 +13,12 @@ yourself.
 Deliberately does not touch Nitro Enclaves -- that's out of scope for this
 pass; see the root README's security status and `Spec.md`.
 
+**State security:** this module uses local Terraform state by default,
+which is unencrypted and can contain a short-lived cluster auth token
+(from `data.aws_eks_cluster_auth`) in plaintext. For anything beyond a
+disposable local run, configure a remote backend with encryption at rest
+(e.g. an S3 bucket with SSE-KMS) instead of local state.
+
 ```bash
 terraform init
 terraform validate

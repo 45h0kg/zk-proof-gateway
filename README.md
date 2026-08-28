@@ -40,6 +40,7 @@ results/                  sample outputs from a logged run (regenerate with run_
 HLD.md                    design document with diagrams
 IMPLEMENTATION_HLD.md      architecture for the containerization/Go+Rust build-out
 IMPLEMENTATION_LLD.md      file-by-file detail for the same
+CHANGELOG.md               PR-by-PR record of the containerization/hardening effort
 ```
 
 ## Requirements

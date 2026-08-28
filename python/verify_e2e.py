@@ -86,10 +86,14 @@ def main():
     # audit volume (see docker/README.md), not just re-prove the protocol
     # against a disposable instance. When set, governance bootstrap and
     # gateway spawning are both skipped; ZKGW_REGISTRY_DIR must point at
-    # that gateway's registry directory (same dir also holds
-    # governance.secret in the docker bootstrap, since it writes both
-    # keys and the predicate into one bind-mounted directory) and
-    # ZKGW_AUDIT_PATH at its audit log file.
+    # that gateway's registry directory (predicate JSON + governance.pub
+    # only -- the gateway/prover never see the secret key, see
+    # docker-compose.yml's bootstrap service), ZKGW_KEYS_DIR at the
+    # separate directory holding governance.secret (needed here only for
+    # the S5 test's ad hoc signed predicate, a test-tooling need distinct
+    # from anything the deployed gateway/prover require; defaults to
+    # ZKGW_REGISTRY_DIR for the local dev flow where they're the same
+    # directory), and ZKGW_AUDIT_PATH at its audit log file.
     external_gateway = os.environ.get("ZKGW_GATEWAY_URL")
     gateway_cmd = None
     server = None
@@ -97,7 +101,8 @@ def main():
 
     if external_gateway:
         URL = external_gateway
-        keys = registry = pathlib.Path(os.environ["ZKGW_REGISTRY_DIR"])
+        registry = pathlib.Path(os.environ["ZKGW_REGISTRY_DIR"])
+        keys = pathlib.Path(os.environ.get("ZKGW_KEYS_DIR", os.environ["ZKGW_REGISTRY_DIR"]))
         audit_path = pathlib.Path(os.environ["ZKGW_AUDIT_PATH"])
     else:
         work = pathlib.Path(tempfile.mkdtemp(prefix="zkgw_e2e_"))

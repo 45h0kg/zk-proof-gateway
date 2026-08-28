@@ -1,5 +1,6 @@
 python/keys/
 python/registry/
+docker/.demo-keys/
 docker/.demo-registry/
 docker/.demo-audit/
 __pycache__/
