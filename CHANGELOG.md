@@ -5,6 +5,29 @@ chronological order. See `IMPLEMENTATION_HLD.md`/`IMPLEMENTATION_LLD.md`
 for full architectural detail and `Spec.md`'s status addendum for how this
 relates to the original one-day spec.
 
+## PR #7 — Attestation-bound predicate proofs (design)
+
+Docs-only. Proposes fusing a hardware attestation (AWS Nitro Enclaves / GCP
+Confidential Space) with the predicate proof so verifying one artifact
+certifies both the predicate and the specific measured binary that read
+the committed value, closing the source-integrity gap `HLD.md` §6/§11
+name but don't answer. No code changes.
+
+### Added
+- `HLD.md` new §7: mutual binding (`report_data` commits to the proof,
+  the Fiat-Shamir/Merlin transcript commits to the attestation), nonce
+  unification between `zk/context` and the enclave attestation call, the
+  6-step gateway verification chain, a `prover_measurement` governance
+  predicate type, the open enclave-I/O (vsock) problem, expected
+  attestation-vs-proof size/latency shape, and a pin-the-measurement
+  policy for audit replay across prover upgrades. Sections 7-10 renumbered
+  to 8-11 to make room.
+- `IMPLEMENTATION_HLD.md` §6: one cross-reference bullet in the "still
+  open" list pointing at the new `HLD.md` §7.
+
+### Verified
+- Design-stage only; no code, no tests, no deployment changes in this PR.
+
 ## PR #6 — A2A (Agent2Agent) protocol surface
 
 Adds the other binding `HLD.md`'s protocol-extension section always

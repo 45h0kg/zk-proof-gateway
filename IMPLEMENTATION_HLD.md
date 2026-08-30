@@ -224,6 +224,12 @@ Still open, explicitly deferred rather than silently dropped:
   **no audit-log rotation or external shipping** — all real
   production-readiness gaps, all lower-urgency than the items above, not
   yet scheduled.
+- **Source-integrity is asserted by topology, not proven cryptographically**
+  — nothing here shows a remote verifier *which binary* produced a
+  committed value. `HLD.md` §7 proposes closing this via a hardware
+  attestation fused into the proof transcript (mutual binding + nonce
+  unification with a governance-registered expected measurement); it is a
+  protocol design only, with no code in this repo yet.
 
 ## 7. Verification record
 
