@@ -145,12 +145,141 @@ A ZK proof binds the statement to the **committed** value, it cannot, by itself,
 - **(A) Source-side prover (recommended):** the prover sidecar is co-located with the source of truth (OMS/position service), which signs `C_v`. The agent merely transports the envelope. Compromise of the LLM agent cannot alter what is proved.
 - **(B) Agent-side prover + data attestation:** the source returns `(value, signature over commitment opening)`; the agent proves over the attested commitment. Weaker (agent sees the value) but requires no source-side changes; still removes the value from **inter-agent** traffic, which is this paper's scope.
 
-## 7. Multi-hop composition patterns
+## 7. Attestation-bound predicate proofs (proposed protocol extension)
+
+**Status: design only — nothing in this section is implemented.** No code in
+this repo currently produces, consumes, or verifies an attestation document.
+This is a protocol proposal for paper Section IV/VII, at the same
+pre-implementation stage §5's `zk-attach/v0` envelope was before P0.
+
+**The gap this closes.** §6 names the source-integrity question and gives
+two topologies, but neither says how a remote verifier cryptographically
+confirms *which binary* produced the committed value — topology A only
+says the prover is co-located with the source. This proposal fuses a
+hardware attestation with the predicate proof so that verifying a single
+artifact certifies two things jointly: (i) the predicate holds over a
+committed value, and (ii) that value was read from the source of truth by a
+specific, measured binary running in an attested enclave. Neither half can
+be substituted independently of the other. Prior TEE+ZK designs tend to
+keep the two layers independent — an attestation carried alongside a proof
+rather than fused into one artifact; this proposal binds them by
+construction, in both directions, so one cannot be swapped without
+invalidating the other.
+
+**Mutual binding.** One-directional binding is insufficient; both of these
+are required:
+
+- **Direction A — attestation commits to the proof.** The enclave populates
+  the attestation document's `report_data` field with
+  `SHA-384(C_v || predicate_id || predicate_version || nonce || action_ref)`.
+  This stops a valid attestation from being replayed alongside a different
+  commitment, predicate, or request.
+- **Direction B — proof commits to the attestation.** Before any commitment
+  is generated, the Fiat-Shamir/Merlin transcript absorbs
+  `SHA-256(attestation_document)` — extending the same
+  `transcript.append_message("context", ...)` call that already does
+  context binding (§3 point 4) with a second, attestation-keyed message.
+  This stops a valid proof from being presented under a substituted (e.g.
+  unattested, or differently-measured) attestation.
+
+Fiat-Shamir binds forward (transcript → proof); `report_data` binds the
+enclave's own output backward (nonce/commitment → attestation). The two
+directions close the same loop from opposite ends, which is why both are
+needed and neither alone suffices.
+
+**Nonce unification — the actual hard part.** The gateway-issued nonce
+already binds proof context (§3 point 4). This proposal requires it to be
+the *same* value passed to the enclave's attestation call (Nitro:
+`NsmProcessAttestation`'s nonce parameter; Confidential Space: the OIDC
+token's audience/nonce claim). If the two nonces were allowed to diverge,
+an attacker could pair a fresh attestation with a stale-but-still-valid
+proof, or the reverse. Making `zk/context`'s single nonce serve both roles,
+with identical expiry for both, is the real protocol contribution here —
+not the hashing.
+
+**Verification chain** (extends `ProofGateway.verify`; hypothetical
+`attestation` field on the envelope), in order:
+
+1. Validate the attestation's certificate chain to the platform root (AWS
+   Nitro root / GCP Confidential Space root).
+2. Check the measurement (Nitro PCR0-2, or GCP image digest) against a
+   governance-registered expected value (new registry predicate type,
+   below).
+3. Check attestation freshness against the `zk/context` nonce.
+4. Recompute `report_data` and compare byte-for-byte.
+5. Verify the ZK proof with the attestation hash absorbed into its
+   transcript (direction B).
+6. Append the attestation digest and measurement to the audit entry
+   alongside the existing commitment/proof-hash/result fields — additive
+   to the schema; old entries still verify unchanged.
+
+Steps 1-4 authenticate the enclave and bind it to this request; step 5 is
+what makes the proof itself worthless without that attestation; step 6
+makes the binding replayable from the audit log the same way the rest of
+the system already is.
+
+**Registry extension: prover measurement as governance data.** Reuses the
+existing signed-predicate machinery (§2) rather than inventing a parallel
+trust path: add a `prover_measurement` predicate type carrying the expected
+PCR set / image digest, Schnorr-signed by the same governance key that
+signs `range_leq` caps, versioned the same way. The registry now states not
+just "the cap is $X" but "the only binary permitted to assert this cap is
+the one measuring `abc123...`" — policy-controlled prover identity, under
+the same signing authority as the business rule it accompanies.
+
+**Honest open problem: enclave I/O.** Nitro Enclaves have no filesystem and
+no network — only a vsock channel to the parent EC2 instance. The prover
+must reach the source of truth through a vsock proxy on the parent, and the
+parent is explicitly untrusted in this threat model (topology A's whole
+point is that compromising the agent/parent host shouldn't let it alter
+what's proved). This proposal does not yet have a construction for why the
+parent can't tamper with what crosses that proxy — it is flagged here as
+open rather than hand-waved, since claiming it's solved without one would
+be dishonest.
+
+**Cost shape: attestation may dominate, not proving.** A Nitro attestation
+document is on the order of 5 KB (COSE_Sign1 plus certificate chain and
+PCRs) against the E2 proof's measured 608 B (§9). This inverts which side
+of the envelope is expensive, and is worth measuring for real once built —
+the interesting result may be that attestation, not proving, becomes the
+cost center, which would be notable given this project's original premise
+(§9) was that proving was the latency risk.
+
+**Measurement churn vs. predicate versioning.** Rebuilding the prover
+changes its PCRs, invalidating a previously-registered
+`prover_measurement`. This is a policy question, not a crypto one, and it
+mirrors the existing predicate-version story (§2): does a prover upgrade
+retroactively invalidate historical audit entries verified under the old
+measurement, or does the audit entry pin the measurement-at-time-of-proof
+the same way it already pins `predicate_version`? Proposed answer: pin it —
+an audit entry's measurement is signed-in-context data like everything else
+in the entry, not a live lookup; re-verifying an old entry checks it
+against whichever `prover_measurement@version` was current then, exactly as
+`range_leq` re-checks against `cap@version` today. No new mechanism is
+needed, only extending the existing versioned-registry pattern to a second
+predicate type.
+
+**Validation strategy, once this moves past design.** Build and test the
+protocol above — nonce unification, transcript absorption, `report_data`
+recomputation, the registry extension, the verification chain — against a
+local mock attestation document shaped like Nitro's (same COSE structure
+and field names, a locally-generated signing cert in place of the AWS
+root), so the protocol logic is exercised by real tests without needing an
+enclave-capable EC2 host, an AWS/GCP account, or ongoing cloud cost. Point
+at real Nitro Enclaves or GCP Confidential Space only once the simulated
+version is proven correct — swapping the root-of-trust check and the
+attestation-document parser is a small, isolated change if the protocol
+underneath is right. (This does not reopen the earlier decision to keep
+Nitro/Confidential Space out of the containerization *deployment* scope —
+that was about running production infrastructure; this is a research
+protocol design that happens to target the same hardware primitive.)
+
+## 8. Multi-hop composition patterns
 
 - **(a) Chained per-hop proofs:** each hop verifies + re-requests; latency adds per hop (measured: +~1.2-2.1 ms verify per hop with E2), max granularity in the audit chain.
 - **(b) Aggregated proof at trust boundary:** m range statements in one Bulletproofs aggregate; measured m=16 -> **928 B and 17.4 ms verify vs 10,752 B and ~33.5 ms** for 16 singles (charts in `results/aggregation.png`). Coarser audit granularity, one boundary check. Prover-side aggregation cost grows ~linearly (219 ms at m=16 on this vCPU) -> pre-compute/async.
 
-## 8. Latency budget (measured, single 2.8 GHz Xeon vCPU)
+## 9. Latency budget (measured, single 2.8 GHz Xeon vCPU)
 
 | Pipeline location | Budget | E2 Bulletproofs (32-bit) | Verdict |
 |---|---|---|---|
@@ -159,7 +288,7 @@ A ZK proof binds the statement to the **committed** value, it cannot, by itself,
 | Batch/settlement, audit re-check | seconds+ | verify-only replay 1-2 ms/entry | trivial |
 | Same, engine E1 (Python baseline) |, | 749 ms prove / 766 ms verify | reference baseline only |
 
-## 9. Repo map & how to run
+## 10. Repo map & how to run
 
 ```
 python/zkgw/{curve,primitives,rangeproof,gateway}.py   # library
@@ -172,10 +301,10 @@ results/                    # measured outputs: CSV/JSON/PNG/transcripts
 
 Run: `python3 demo_trading.py`, `python3 tests_soundness.py`, `python3 bench.py`; Rust: `cargo build --release && ./target/release/zkrp bench`.
 
-## 10. Known prototype limitations (feed paper Section VII)
+## 11. Known prototype limitations (feed paper Section VII)
 
 - E1 is not constant-time; secp256k1 in pure Python is for auditability, not production. E2 (dalek) is the production path.
 - Only `range_leq` is wired end-to-end; set-membership and boolean composition are registry `ptype`s left as stubs by design.
 - Gateway is in-process; a networked deployment adds transport auth (mTLS/SPIFFE), orthogonal to the proof layer.
 - Metadata leakage (which predicate, when, how often) is *not* hidden, matches paper §VII.
-- Proof-of-consistency with the source of truth requires topology A or B above; the ZKP alone does not provide it.
+- Proof-of-consistency with the source of truth requires topology A or B above; the ZKP alone does not provide it. §7 proposes closing this gap for topology A via a hardware attestation fused into the proof transcript — design only, not implemented.
