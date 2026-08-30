@@ -224,14 +224,103 @@ Still open, explicitly deferred rather than silently dropped:
   **no audit-log rotation or external shipping** — all real
   production-readiness gaps, all lower-urgency than the items above, not
   yet scheduled.
-- **Source-integrity is asserted by topology, not proven cryptographically**
-  — nothing here shows a remote verifier *which binary* produced a
-  committed value. `HLD.md` §7 proposes closing this via a hardware
-  attestation fused into the proof transcript (mutual binding + nonce
-  unification with a governance-registered expected measurement); it is a
-  protocol design only, with no code in this repo yet.
+- **Attestation-bound proofs (§7 below) are validated against a mock
+  attestation authority, not real Nitro Enclaves or GCP Confidential
+  Space.** The protocol -- mutual binding, nonce unification, the 6-step
+  verification chain -- is real and tested; the hardware root of trust is
+  not. Swapping the mock for a real attestation call is the remaining
+  step (`HLD.md` §7's "Validation strategy").
+- **Audit log schema is unchanged by attestation.** The attestation digest
+  and measurement are logged (server-side `log.Printf`, `verifyAttachment`
+  in `gatewayservice/main.go`) but not appended to the hash-chained audit
+  entry -- extending `auditlog.go`'s canonical, cross-language-byte-exact
+  format (Python's `AuditLog` re-verifies Go-written entries, see §7 below)
+  is a deliberately separate piece of work, not bundled into this pass.
+- **Not wired into Docker/Helm/`verify_e2e.py`.** No bootstrap script
+  registers a `prover_measurement` predicate in the demo stack, so the
+  Docker Compose and Helm deployments run the unattested path exactly as
+  before; the attested path is exercised by `cargo test`, `go test`
+  (`gatewayservice/attestation_test.go`, `internal/zkrpclient`), and by
+  hand against the real built binaries, not by the existing 19/19 E2E
+  scripts.
 
-## 7. Verification record
+## 7. Attestation-bound predicate proofs: the mock implementation
+
+`HLD.md` §7 proposes fusing a hardware attestation with the predicate
+proof so verifying one artifact certifies both the predicate and the
+specific measured prover binary that produced the committed value. This
+section is what was actually built to validate that protocol locally,
+per §7's own "Validation strategy" -- a real, tested implementation
+against a mock attestation authority, not yet run against real Nitro
+Enclaves or GCP Confidential Space.
+
+**Mock attestation authority** (`rust/zkrp/src/attestation.rs`): an
+`AttestationDoc` shaped like Nitro's attestation (module_id, timestamp, a
+PCR0-style measurement, nonce, user_data, signature) but with a simple
+fixed-layout binary encoding instead of real CBOR/COSE, and a single
+Ed25519 signature from a key derived from a fixed, publicly-known seed
+instead of a hardware-rooted certificate chain. `current_measurement()`
+is a fixed constant standing in for "this build's PCR0" -- not a real
+measurement of any binary.
+
+**Mutual binding, for real**: `prove_range_leq_attested` computes the
+value commitment first, generates the attestation over it
+(`report_data = SHA-384(commit_v || ctx)`, direction A), then absorbs
+`SHA-256(attestation)` into the same Merlin transcript the Bulletproof
+itself is built against (direction B) before any Fiat-Shamir challenge is
+drawn. `verify_range_leq_attested` runs the 6-step chain from `HLD.md`
+§7 (steps 1-5; step 6 is the caller's job): mock signature check,
+measurement match (skipped, not weakened, when no expectation is
+configured -- see below), nonce/context match, `report_data` match, then
+proof verification under the attested transcript.
+
+**CLI**: `zkrp attest-prove <nbits> <cap> <value> <ctx>`, `zkrp
+attest-verify <nbits> <cap> <proof_hex> <commit_v_hex> <ctx>
+<attestation_hex> <expected_measurement_hex>`, `zkrp attest-measurement`.
+21 Rust unit tests cover the honest path and every substitution/tamper
+case: wrong measurement, tampered attestation signature, nonce mismatch
+(replay across contexts), a genuine but mismatched attestation swapped
+onto a different proof, and the empty-expected-measurement skip path.
+
+**Registry**: a new `prover_measurement` predicate type
+(`go/internal/predicate`), signed by the same governance key and Schnorr
+scheme as `range_leq` (`python/governance_cli.py`'s new
+`define-measurement` subcommand), verified by a shared `verifySchnorr`
+helper rather than duplicating the Schnorr math. `Registry` gains a
+second store (`registry.go`'s `measStore`/`PublishMeasurement`/
+`GetMeasurement`); the gateway's startup loader peeks each registry
+file's `ptype` (`predicate.PeekPType`) to dispatch to the right parser.
+
+**Gateway policy, opt-in per deployment**: `proverservice` now always
+attests (`client.ProveAttested` instead of `client.Prove` in
+`handleProve`) -- a real enclave doesn't get to opt out of proving what it
+is on request. Enforcement is the gateway's decision, made in
+`verifyAttachment`: if the envelope carries an attestation (which it now
+always does), the gateway always verifies via the attested transcript --
+anything else would fail to verify, since the proof was built against
+that transcript. Whether the attestation's *measurement* is checked
+against anything is separate: if a `prover_measurement@1` predicate is
+registered, its value is passed as the expected measurement and a
+mismatch denies; if none is registered, the attestation is still fully
+validated (signature, nonce, report_data) but the measurement match is
+skipped rather than enforced against nothing. Absent an attestation
+entirely, `verifyAttachment` only denies if a measurement policy is
+registered (attestation required); otherwise it falls back to the
+original unattested `Verify` path unchanged, for any prover that predates
+this work.
+
+This distinction -- *validate the attestation you were given* vs.
+*require and police a specific one* -- is what makes proverservice's
+always-attest change backward compatible: a regression check
+(`go/gatewayservice/attestation_test.go`'s
+`TestProcessGovernedCall_NoMeasurementPredicateRegistered_FallsBackButStillAllows`)
+exists specifically because an earlier version of this change verified
+attested proofs under the *unattested* transcript whenever no measurement
+predicate was registered, which fails every time (the transcripts
+genuinely differ) -- caught by rerunning the full `experiments/run_all.sh`
+suite, not by the unit tests written before that point.
+
+## 8. Verification record
 
 Every claim above has actually been run, not just reasoned about:
 
@@ -248,6 +337,7 @@ Every claim above has actually been run, not just reasoned about:
 | Audit durability (Kubernetes) | Deleted the gateway pod mid-test on that cluster, entries and chain survived across the restart boundary |
 | `terraform validate` / `fmt -check` | Both modules, including after the GKE OAuth-scope fix |
 | CI | `.github/workflows/ci.yml` runs both engines' full E2E path plus all unit tests on every push |
+| Attestation-bound proofs (mock) | `cargo test` (21 cases, incl. tamper/substitution), 3 new `gatewayservice` integration tests against the real built `zkrp` binary, real HTTP calls by hand against running `gateway-service`/`prover-service` for both the correct- and wrong-measurement cases, full `experiments/run_all.sh` (both engines, 19/19) rerun clean afterward |
 
 `terraform apply` and any enclave/Confidential-Space work remain
 unattempted — stated here plainly, matching the standard this whole effort

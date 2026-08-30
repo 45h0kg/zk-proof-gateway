@@ -147,10 +147,19 @@ A ZK proof binds the statement to the **committed** value, it cannot, by itself,
 
 ## 7. Attestation-bound predicate proofs (proposed protocol extension)
 
-**Status: design only — nothing in this section is implemented.** No code in
-this repo currently produces, consumes, or verifies an attestation document.
-This is a protocol proposal for paper Section IV/VII, at the same
-pre-implementation stage §5's `zk-attach/v0` envelope was before P0.
+**Status: implemented against a local mock attestation authority, per the
+"Validation strategy" paragraph below -- not yet run against real Nitro
+Enclaves or GCP Confidential Space hardware.** `rust/zkrp/src/attestation.rs`
+implements the mock enclave and the mutual binding; `zkrp attest-prove` /
+`attest-verify` / `attest-measurement` are real CLI subcommands (21 Rust
+unit tests); the Go gateway wires the 6-step verification chain into the
+live `tools/call`/`message/send` path via a `prover_measurement` registry
+predicate type (`go/internal/predicate`, `gatewayservice/registry.go`,
+`verifyAttachment`), opt-in per deployment -- see
+`IMPLEMENTATION_HLD.md`/`IMPLEMENTATION_LLD.md` for the as-built detail and
+`CHANGELOG.md` for the PR record. The paper-level protocol description
+below is unchanged by this; what moved is only the "Status" line and the
+validation-strategy paragraph, which is no longer future tense.
 
 **The gap this closes.** §6 names the source-integrity question and gives
 two topologies, but neither says how a remote verifier cryptographically
@@ -259,20 +268,25 @@ against whichever `prover_measurement@version` was current then, exactly as
 needed, only extending the existing versioned-registry pattern to a second
 predicate type.
 
-**Validation strategy, once this moves past design.** Build and test the
+**Validation strategy — done for the mock, not yet for real hardware.** The
 protocol above — nonce unification, transcript absorption, `report_data`
-recomputation, the registry extension, the verification chain — against a
-local mock attestation document shaped like Nitro's (same COSE structure
-and field names, a locally-generated signing cert in place of the AWS
-root), so the protocol logic is exercised by real tests without needing an
-enclave-capable EC2 host, an AWS/GCP account, or ongoing cloud cost. Point
-at real Nitro Enclaves or GCP Confidential Space only once the simulated
-version is proven correct — swapping the root-of-trust check and the
-attestation-document parser is a small, isolated change if the protocol
-underneath is right. (This does not reopen the earlier decision to keep
-Nitro/Confidential Space out of the containerization *deployment* scope —
-that was about running production infrastructure; this is a research
-protocol design that happens to target the same hardware primitive.)
+recomputation, the registry extension, the verification chain — is built
+and tested (`rust/zkrp/src/attestation.rs`) against a local mock
+attestation document with the same field set as Nitro's (module_id,
+timestamp, PCR-style measurement, nonce, user_data, signature) but a
+simpler encoding (a fixed binary layout, not real CBOR/COSE) and a single
+Ed25519 signature from a fixed, publicly-derivable seed in place of a
+hardware-rooted certificate chain — so the protocol logic is exercised by
+real tests without needing an enclave-capable EC2 host, an AWS/GCP
+account, or ongoing cloud cost. Pointing this at real Nitro Enclaves or GCP
+Confidential Space is the remaining step: swap `attestation.rs`'s
+`generate`/`verify_signature` for a real attestation call and a real
+certificate-chain check against the platform root; nothing outside that
+module should need to change if the protocol above is right. (This does
+not reopen the earlier decision to keep Nitro/Confidential Space out of
+the containerization *deployment* scope — that was about running
+production infrastructure; this is a research protocol design that
+happens to target the same hardware primitive.)
 
 ## 8. Multi-hop composition patterns
 

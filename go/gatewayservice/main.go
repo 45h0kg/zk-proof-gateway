@@ -68,6 +68,16 @@ type ctxEntry struct {
 // vector for any caller able to reach that endpoint at all.
 const contextTTL = 5 * time.Minute
 
+// measurementPredicateID/Version is the well-known registry entry
+// governance publishes to require attestation-bound proofs (HLD.md §7). If
+// the registry has no such predicate, verifyAttachment falls back to the
+// unattested path unchanged -- attestation enforcement is opt-in per
+// deployment, activated purely by whether this predicate is registered.
+const (
+	measurementPredicateID      = "prover_measurement"
+	measurementPredicateVersion = 1
+)
+
 type Order struct {
 	OrderRef   string `json:"order_ref"`
 	Symbol     string `json:"symbol"`
@@ -188,6 +198,11 @@ type proofPayload struct {
 	Cap        int64  `json:"cap"`
 	ProofHex   string `json:"proof_hex"`
 	CommitVHex string `json:"commit_v_hex"`
+	// AttestationHex is the mock enclave attestation from HLD.md §7's
+	// proposed protocol (rust/zkrp's attest-prove); empty when the prover
+	// used the unattested path. Optional on read for backward
+	// compatibility with envelopes produced before this field existed.
+	AttestationHex string `json:"attestation_hex,omitempty"`
 }
 
 // maxBodyBytes bounds request bodies well above any legitimate JSON-RPC
@@ -432,8 +447,48 @@ func verifyAttachment(state *VenueState, att attachment, ctx zkctx.Context) (aud
 		return "", 0, false, err
 	}
 
+	// The current prover (proverservice) always attests (HLD.md §7) --
+	// which binds the attestation digest into the proof's own Fiat-Shamir
+	// transcript, so a proof carrying an attestation MUST always be
+	// verified via the attested transcript, regardless of local policy.
+	// What governance's prover_measurement registration controls is
+	// narrower: whether that attestation's measurement is checked against
+	// a specific expected value, and whether an envelope is allowed to
+	// omit the attestation entirely. See zkrp's verify_range_leq_attested:
+	// an empty expected-measurement argument fully validates the
+	// attestation (signature, nonce, report_data) without policing which
+	// binary produced it.
+	measPred, measErr := state.registry.GetMeasurement(measurementPredicateID, measurementPredicateVersion)
+	attestationRequired := measErr == nil
+	expectedMeasurementHex := ""
+	if attestationRequired {
+		expectedMeasurementHex = measPred.Params.MeasurementHex
+	}
+
+	var attestationDigest, measurementHex string
+	attested := payload.AttestationHex != ""
 	t0 := time.Now()
-	if pred.PType == "range_leq" {
+	switch {
+	case pred.PType != "range_leq":
+		// ok stays false; unsupported predicate type.
+	case attested:
+		res, verr := state.zkrp.VerifyAttested(pred.Params.NBits, pred.Params.Cap,
+			payload.ProofHex, payload.CommitVHex, ctx.Canonical(),
+			payload.AttestationHex, expectedMeasurementHex)
+		if verr != nil {
+			return "", 0, false, verr
+		}
+		ok = res.OK
+		attestationDigest = res.AttestationDigestHex
+		measurementHex = res.MeasurementHex
+		if !res.OK {
+			log.Printf("attestation check failed: %s", res.Reason)
+		}
+	case attestationRequired:
+		// Policy requires an attestation (a prover_measurement predicate
+		// is registered) but this envelope doesn't carry one.
+		ok = false
+	default:
 		res, verr := state.zkrp.Verify(pred.Params.NBits, pred.Params.Cap, payload.ProofHex, payload.CommitVHex, ctx.Canonical())
 		if verr != nil {
 			return "", 0, false, verr
@@ -462,8 +517,19 @@ func verifyAttachment(state *VenueState, att attachment, ctx zkctx.Context) (aud
 	if aerr != nil {
 		return "", 0, false, aerr
 	}
-	log.Printf("audit %s result=%s predicate=%s@v%d request_id=%s verify_ms=%.3f",
-		entryHash, result, pred.PredicateID, pred.Version, ctx.RequestID, round3(verifyMs))
+	if attested {
+		// Logged, not hashed into the audit entry: extending the
+		// cross-language, byte-exact audit schema (auditlog.go's
+		// canonicalBody/canonicalFull, mirrored by Python's AuditLog) is a
+		// deliberately separate piece of work, not bundled into this pass
+		// -- see CHANGELOG.md. The attestation digest and measurement are
+		// still part of the operational record here, just not chained.
+		log.Printf("audit %s result=%s predicate=%s@v%d request_id=%s verify_ms=%.3f attestation_digest=%s measurement=%s",
+			entryHash, result, pred.PredicateID, pred.Version, ctx.RequestID, round3(verifyMs), attestationDigest, measurementHex)
+	} else {
+		log.Printf("audit %s result=%s predicate=%s@v%d request_id=%s verify_ms=%.3f",
+			entryHash, result, pred.PredicateID, pred.Version, ctx.RequestID, round3(verifyMs))
+	}
 	return entryHash, verifyMs, ok, nil
 }
 
@@ -533,7 +599,25 @@ func main() {
 	}
 	sort.Strings(files)
 	for _, f := range files {
-		pred, err := predicate.LoadFile(f)
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			log.Fatalf("reading predicate %s: %v", f, err)
+		}
+		ptype, err := predicate.PeekPType(raw)
+		if err != nil {
+			log.Fatalf("reading ptype of %s: %v", f, err)
+		}
+		if ptype == "prover_measurement" {
+			pred, err := predicate.ParseMeasurementDoc(raw)
+			if err != nil {
+				log.Fatalf("loading measurement predicate %s: %v", f, err)
+			}
+			if err := registry.PublishMeasurement(pred); err != nil {
+				log.Fatalf("publishing measurement predicate %s: %v", f, err)
+			}
+			continue
+		}
+		pred, err := predicate.ParseDoc(raw)
 		if err != nil {
 			log.Fatalf("loading predicate %s: %v", f, err)
 		}

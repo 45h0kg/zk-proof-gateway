@@ -48,10 +48,11 @@ func readSourceValue() (int64, error) {
 }
 
 type proofPayload struct {
-	NBits      int    `json:"nbits"`
-	Cap        int64  `json:"cap"`
-	ProofHex   string `json:"proof_hex"`
-	CommitVHex string `json:"commit_v_hex"`
+	NBits          int    `json:"nbits"`
+	Cap            int64  `json:"cap"`
+	ProofHex       string `json:"proof_hex"`
+	CommitVHex     string `json:"commit_v_hex"`
+	AttestationHex string `json:"attestation_hex,omitempty"`
 }
 
 type proveRequest struct {
@@ -113,7 +114,13 @@ func handleProve(client *zkrpclient.Client) http.HandlerFunc {
 			return
 		}
 
-		res, err := client.Prove(pred.Params.NBits, pred.Params.Cap, value, ctx.Canonical())
+		// Always attests (HLD.md §7): a real enclave doesn't get to opt out
+		// of proving what it is on request. Whether a relying party
+		// enforces the attestation is a verifier-side policy decision --
+		// the gateway checks it only when governance has registered a
+		// prover_measurement predicate (verifyAttachment in
+		// gatewayservice), and simply ignores AttestationHex otherwise.
+		res, err := client.ProveAttested(pred.Params.NBits, pred.Params.Cap, value, ctx.Canonical())
 		if err != nil {
 			if err == zkrpclient.ErrPredicateViolated {
 				writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "predicate violated"})
@@ -124,7 +131,7 @@ func handleProve(client *zkrpclient.Client) http.HandlerFunc {
 		}
 
 		payload := proofPayload{NBits: pred.Params.NBits, Cap: pred.Params.Cap,
-			ProofHex: res.ProofHex, CommitVHex: res.CommitVHex}
+			ProofHex: res.ProofHex, CommitVHex: res.CommitVHex, AttestationHex: res.AttestationHex}
 		payloadBytes, _ := json.Marshal(payload)
 
 		writeJSON(w, http.StatusOK, envelope{

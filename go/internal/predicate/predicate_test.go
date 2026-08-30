@@ -97,3 +97,105 @@ func TestCanonicalBytes_MatchesPythonFormat(t *testing.T) {
 		t.Fatalf("canonical bytes mismatch:\n got:  %s\n want: %s", got, want)
 	}
 }
+
+// ------------------------------------------------- prover_measurement type
+//
+// Fixture generated once via a real `python3 governance_cli.py
+// define-measurement` run against a throwaway keypair (see HLD.md §7 /
+// CHANGELOG.md for the attestation-bound-proofs work) -- same pattern as
+// fixturePredicate above: proves this package accepts a signature actually
+// produced by the Python governance tooling for the new predicate type,
+// not just anything this package can construct and verify against itself.
+const (
+	measFixturePubHex = "022452b82fd61ad8d9a934319cfc19355b696db5438af4e4ddca58095dfda75b09"
+	measFixtureEHex   = "0xa3ee6b5d946b317e64c2520176607e20825dddfeb97ff76b3bf84d982653ba1"
+	measFixtureZHex   = "0x39e4de653615c2df92aceec769be5aa05069bf810a36df1077964f75b74d767c"
+	measFixtureHex    = "db5df15da44433d96b1df43ce82d14d5c62077cdeca0a8c2fc5247a75eb6591a92666ab300843956e1313bb8e718914b"
+)
+
+func fixtureMeasurementPredicate(t *testing.T) (*MeasurementPredicate, *secp256k1.PublicKey) {
+	t.Helper()
+	e, err := hexToBig(measFixtureEHex)
+	if err != nil {
+		t.Fatalf("hexToBig(e): %v", err)
+	}
+	z, err := hexToBig(measFixtureZHex)
+	if err != nil {
+		t.Fatalf("hexToBig(z): %v", err)
+	}
+	pred := &MeasurementPredicate{
+		PredicateID: "prover_measurement",
+		Version:     1,
+		PType:       "prover_measurement",
+		Params:      MeasurementParams{Algo: "sha384-mock", MeasurementHex: measFixtureHex},
+		Owner:       "risk-governance-team",
+		SigE:        e,
+		SigZ:        z,
+	}
+	pubBytes, err := hex.DecodeString(measFixturePubHex)
+	if err != nil {
+		t.Fatalf("hex.DecodeString(pub): %v", err)
+	}
+	pub, err := secp256k1.ParsePubKey(pubBytes)
+	if err != nil {
+		t.Fatalf("ParsePubKey: %v", err)
+	}
+	return pred, pub
+}
+
+func TestMeasurementPredicate_VerifySignature_AcceptsRealPythonSignature(t *testing.T) {
+	pred, pub := fixtureMeasurementPredicate(t)
+	if !pred.VerifySignature(pub) {
+		t.Fatal("expected the fixture signature (produced by Python's governance_cli.py) to verify")
+	}
+}
+
+func TestMeasurementPredicate_VerifySignature_RejectsTamperedMeasurement(t *testing.T) {
+	pred, pub := fixtureMeasurementPredicate(t)
+	pred.Params.MeasurementHex = "00" // tamper the signed body after the fact
+	if pred.VerifySignature(pub) {
+		t.Fatal("signature must not verify after the measurement value changes")
+	}
+}
+
+func TestMeasurementPredicate_CanonicalBytes_MatchesPythonFormat(t *testing.T) {
+	pred, _ := fixtureMeasurementPredicate(t)
+	got := string(pred.CanonicalBytes())
+	want := `{"owner": "risk-governance-team", "params": {"algo": "sha384-mock", "measurement_hex": "` + measFixtureHex + `"}, "predicate_id": "prover_measurement", "ptype": "prover_measurement", "version": 1}`
+	if got != want {
+		t.Fatalf("canonical bytes mismatch:\n got:  %s\n want: %s", got, want)
+	}
+}
+
+func TestPeekPType(t *testing.T) {
+	doc := []byte(`{"predicate": {"ptype": "prover_measurement", "predicate_id": "x", "version": 1, "params": {}, "owner": "o"}, "signature": {"e": "0x1", "z": "0x1"}}`)
+	pt, err := PeekPType(doc)
+	if err != nil {
+		t.Fatalf("PeekPType: %v", err)
+	}
+	if pt != "prover_measurement" {
+		t.Fatalf("got %q, want %q", pt, "prover_measurement")
+	}
+}
+
+func TestParseMeasurementDoc_RoundTrips(t *testing.T) {
+	raw := []byte(`{
+  "predicate": {
+    "owner": "risk-governance-team",
+    "params": {"algo": "sha384-mock", "measurement_hex": "` + measFixtureHex + `"},
+    "predicate_id": "prover_measurement",
+    "ptype": "prover_measurement",
+    "version": 1
+  },
+  "signature": {"e": "` + measFixtureEHex + `", "z": "` + measFixtureZHex + `"}
+}`)
+	pred, err := ParseMeasurementDoc(raw)
+	if err != nil {
+		t.Fatalf("ParseMeasurementDoc: %v", err)
+	}
+	pubBytes, _ := hex.DecodeString(measFixturePubHex)
+	pub, _ := secp256k1.ParsePubKey(pubBytes)
+	if !pred.VerifySignature(pub) {
+		t.Fatal("expected parsed doc's signature to verify")
+	}
+}

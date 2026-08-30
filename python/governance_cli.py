@@ -66,16 +66,7 @@ def cmd_keygen(args):
     print(f"wrote {pub_path}  (distribute to gateways out of band)")
 
 
-def cmd_define(args):
-    secret = int(pathlib.Path(args.key).read_text().strip(), 16)
-    pred = Predicate(
-        predicate_id=args.id,
-        version=args.version,
-        ptype=args.type,
-        params={"cap": args.cap, "nbits": args.nbits, "unit": args.unit},
-        owner=args.owner,
-    )
-    pred.signature = sign(secret, pred.canonical_bytes())
+def _write_predicate_doc(pred: Predicate, outdir: str) -> pathlib.Path:
     doc = {
         "predicate": {
             "predicate_id": pred.predicate_id,
@@ -86,11 +77,44 @@ def cmd_define(args):
         },
         "signature": {"e": hex(pred.signature[0]), "z": hex(pred.signature[1])},
     }
-    outdir = pathlib.Path(args.out)
-    outdir.mkdir(parents=True, exist_ok=True)
-    path = outdir / f"{args.id}.v{args.version}.json"
+    outdir_path = pathlib.Path(outdir)
+    outdir_path.mkdir(parents=True, exist_ok=True)
+    path = outdir_path / f"{pred.predicate_id}.v{pred.version}.json"
     path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+    return path
+
+
+def cmd_define(args):
+    secret = int(pathlib.Path(args.key).read_text().strip(), 16)
+    pred = Predicate(
+        predicate_id=args.id,
+        version=args.version,
+        ptype=args.type,
+        params={"cap": args.cap, "nbits": args.nbits, "unit": args.unit},
+        owner=args.owner,
+    )
+    pred.signature = sign(secret, pred.canonical_bytes())
+    path = _write_predicate_doc(pred, args.out)
     print(f"wrote signed predicate: {path}")
+
+
+def cmd_define_measurement(args):
+    """Signs a `prover_measurement` predicate: governance data naming the
+    only prover binary measurement permitted to assert a cap, under the
+    same signing authority as the cap itself (HLD.md §7). --measurement-hex
+    is the mock enclave's own value, e.g. `zkrp attest-measurement`'s
+    output; this tool stays agnostic of how that hex was produced."""
+    secret = int(pathlib.Path(args.key).read_text().strip(), 16)
+    pred = Predicate(
+        predicate_id=args.id,
+        version=args.version,
+        ptype="prover_measurement",
+        params={"algo": args.algo, "measurement_hex": args.measurement_hex},
+        owner=args.owner,
+    )
+    pred.signature = sign(secret, pred.canonical_bytes())
+    path = _write_predicate_doc(pred, args.out)
+    print(f"wrote signed measurement predicate: {path}")
 
 
 def parse_predicate_doc(doc: dict) -> Predicate:
@@ -140,6 +164,16 @@ def main():
     d.add_argument("--unit", default="USD_cents"); d.add_argument("--owner", required=True)
     d.add_argument("--key", required=True); d.add_argument("--out", required=True)
     d.set_defaults(fn=cmd_define)
+
+    m = sub.add_parser("define-measurement",
+                        help="sign a prover_measurement predicate (HLD.md §7)")
+    m.add_argument("--id", default="prover_measurement"); m.add_argument("--version", type=int, default=1)
+    m.add_argument("--measurement-hex", required=True,
+                    help="expected prover measurement, e.g. `zkrp attest-measurement`'s output")
+    m.add_argument("--algo", default="sha384-mock")
+    m.add_argument("--owner", required=True)
+    m.add_argument("--key", required=True); m.add_argument("--out", required=True)
+    m.set_defaults(fn=cmd_define_measurement)
 
     v = sub.add_parser("verify"); v.add_argument("--file", required=True); v.add_argument("--pub", required=True)
     v.set_defaults(fn=cmd_verify)

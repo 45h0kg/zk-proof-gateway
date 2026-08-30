@@ -5,6 +5,78 @@ chronological order. See `IMPLEMENTATION_HLD.md`/`IMPLEMENTATION_LLD.md`
 for full architectural detail and `Spec.md`'s status addendum for how this
 relates to the original one-day spec.
 
+## PR #8 — Attestation-bound predicate proofs (mock implementation)
+
+Implements PR #7's design against a local mock attestation authority
+(HLD.md §7's "Validation strategy") -- real code and tests, not yet real
+Nitro Enclaves or GCP Confidential Space hardware. Go+Rust only.
+
+### Added
+- `rust/zkrp/src/attestation.rs` (new file): mock enclave attestation --
+  Ed25519-signed document over module_id/timestamp/measurement/nonce/
+  user_data, with a fixed publicly-derivable "root" seed standing in for
+  a hardware root of trust. 6 unit tests.
+- `rust/zkrp`: `attest-prove`/`attest-verify`/`attest-measurement` CLI
+  subcommands implementing the mutual binding (report_data commits to the
+  proof, the Merlin transcript commits to the attestation) and the 6-step
+  verification chain, including an empty-expected-measurement skip path
+  for when no policy is configured. 14 new unit tests (21 total).
+- `go/internal/predicate`: `MeasurementPredicate`/`MeasurementParams`,
+  `PeekPType`, `ParseMeasurementDoc` -- a governance-signed
+  `prover_measurement` predicate type, parallel to `range_leq` rather than
+  a generalized params representation. Shared `verifySchnorr` helper.
+- `go/internal/zkrpclient`: `ProveAttested`/`VerifyAttested`/
+  `CurrentMeasurement`, wrapping the new CLI subcommands.
+- `go/gatewayservice/registry.go`: a second predicate store
+  (`measStore`/`PublishMeasurement`/`GetMeasurement`).
+- `go/gatewayservice`: startup registry loading now dispatches on `ptype`;
+  `verifyAttachment` always verifies an attested envelope via the attested
+  transcript, checks the measurement against a registered
+  `prover_measurement@1` predicate when one exists, and otherwise falls
+  back to the original unattested path unchanged.
+- `go/proverservice`: `handleProve` always attests now.
+- `python/governance_cli.py`: `define-measurement` subcommand, signing
+  `prover_measurement` predicates the same way `define` signs `range_leq`.
+- Three new Go test files (`gatewayservice/attestation_test.go`,
+  `internal/zkrpclient/zkrpclient_test.go`, plus fixtures added to
+  `internal/predicate/predicate_test.go`), one of them a regression test
+  for a transcript-mismatch bug found and fixed during this work (see
+  Fixed, below).
+- `HLD.md` §7, `IMPLEMENTATION_HLD.md` (new §7), `IMPLEMENTATION_LLD.md`
+  (new section): updated from "design only" to as-built detail.
+
+### Fixed
+- **Found during this work, not shipped**: an early version had
+  `proverservice` always attest (binding the attestation digest into the
+  proof's own transcript) while the gateway only used the attested
+  verify path when a `prover_measurement` predicate was registered --
+  meaning every proof failed to verify whenever no such predicate existed
+  (the transcripts genuinely differ). Caught by rerunning
+  `experiments/run_all.sh` after the change (both engines dropped from
+  19/19), not by the unit tests written up to that point. Fixed by making
+  the *transcript choice* follow whether the envelope carries an
+  attestation (always, currently) while the *measurement policy* stays
+  registry-driven and independent -- see `IMPLEMENTATION_LLD.md`.
+
+### Known, deferred (not fixed here)
+- Audit-log schema unchanged: attestation digest/measurement are logged,
+  not hashed into the audit chain.
+- No Docker Compose/Helm bootstrap registers a `prover_measurement`
+  predicate -- the existing demo stacks and `verify_e2e.py`'s 19/19 keep
+  exercising the unattested path exactly as before.
+- Real Nitro Enclaves/GCP Confidential Space integration: unattempted.
+
+### Verified
+- `cargo test` (21 cases) + `cargo build --release`.
+- `go build ./...`, `go vet ./...`, `go test ./...` (all packages,
+  including the new integration tests against the real release binary).
+- A real `governance_cli.py define-measurement` run, verified by this Go
+  code.
+- Manual end-to-end HTTP calls against real running `gateway-service`/
+  `prover-service` processes: correct-measurement ALLOW, wrong-measurement
+  DENY, no-policy-registered ALLOW.
+- Full `experiments/run_all.sh` rerun clean afterward, both engines 19/19.
+
 ## PR #7 — Attestation-bound predicate proofs (design)
 
 Docs-only. Proposes fusing a hardware attestation (AWS Nitro Enclaves / GCP
