@@ -319,6 +319,141 @@ numbers above predate this addition.
 
 ---
 
+## Attestation-bound predicate proofs (mock implementation)
+
+`HLD.md` §7 / `IMPLEMENTATION_HLD.md` §7 for the design and architecture;
+this is the file-by-file detail. Go+Rust only, matching this whole
+effort's engine scope -- Python's E1 stays as the paper's readable
+reference and is untouched by this work.
+
+- **`rust/zkrp/src/attestation.rs`** (new file): the mock attestation
+  authority. `current_measurement()` is a fixed SHA-384 constant standing
+  in for a real PCR0; `AttestationDoc::generate(commit_v, ctx)` builds and
+  Ed25519-signs a document over `{module_id, timestamp, measurement, nonce
+  = ctx bytes, user_data = report_data(commit_v, ctx)}`; `verify_signature`/
+  `check_measurement`/`check_nonce`/`check_report_data` are the per-field
+  checks the verify path calls in order. `encode`/`decode`/`to_hex`/
+  `from_hex` are a hand-rolled fixed-layout binary format (length-prefixed
+  strings, fixed-width fields) -- no serde dependency, matching this
+  crate's existing style. 6 unit tests.
+- **`rust/zkrp/src/main.rs`**: `transcript_attested(ctx, attestation_digest)`
+  extends the existing `transcript(ctx)` with one more
+  `append_message(b"attestation", ...)` call. `prove_range_leq_attested`
+  computes the Pedersen commitment itself (via `pc.commit(...)`, not via
+  `prove_multiple`'s return value) *before* building the attestation and
+  the transcript -- report_data needs the real commitment, and the
+  transcript must absorb the attestation before any Fiat-Shamir challenge
+  is drawn; `debug_assert_eq!` checks the independently-computed
+  commitment matches what `prove_multiple` returns.
+  `verify_range_leq_attested` runs the 6-step chain; an empty
+  `expected_measurement_hex` skips the measurement-match step entirely
+  (rather than failing to decode it) so a gateway with no registered
+  `prover_measurement` predicate can still verify a fully-consistent
+  attestation without policing which binary produced it. New CLI
+  subcommands `attest-prove`/`attest-verify`/`attest-measurement`. 14 new
+  unit tests on top of the 7 already there (21 total): honest roundtrip,
+  wrong measurement, tampered attestation signature, nonce mismatch
+  (replay across contexts), a genuine attestation for one proof swapped
+  onto a different one (report_data catches it), tampered proof under the
+  attested path, malformed attestation, and the empty-measurement skip.
+- **`rust/zkrp/Cargo.toml`**: two new dependencies, `sha2` (SHA-256/384)
+  and `ed25519-dalek` v2 (signing). No version conflicts with the existing
+  `curve25519-dalek-ng`/`bulletproofs`/`merlin` stack -- confirmed by a
+  clean `cargo build`/`cargo test`/`cargo build --release`.
+- **`go/internal/predicate/predicate.go`**: new `MeasurementParams`/
+  `MeasurementPredicate` types and `PeekPType`/`ParseMeasurementDoc`/
+  `LoadMeasurementFile`, parallel to the existing `Params`/`Predicate` for
+  `range_leq` rather than generalizing it -- a generic `map[string]any`
+  params representation would have needed a general canonical-JSON
+  encoder matching Python's `json.dumps(sort_keys=True)` for arbitrary
+  nested values (including the known large-integer/float-formatting trap
+  from the Helm work), which the existing fixed-format-string
+  `CanonicalBytes` approach sidesteps entirely by being type-specific. The
+  Schnorr verify math itself was extracted into a shared `verifySchnorr`
+  helper so both predicate types call the identical, already-tested logic
+  rather than duplicating it.
+- **`go/internal/predicate/predicate_test.go`**: a second real-signature
+  fixture (`measFixture*`), generated the same way as the existing
+  `range_leq` fixture -- a real `python3 governance_cli.py
+  define-measurement` run against a throwaway keypair, not self-signed --
+  covering accept/reject-tamper/canonical-bytes/PeekPType/round-trip-parse
+  for the new type.
+- **`go/internal/zkrpclient/zkrpclient.go`**: `ProveAttested`/
+  `VerifyAttested`/`CurrentMeasurement`, wrapping the three new CLI
+  subcommands the same way `Prove`/`Verify` already wrap `prove`/`verify`.
+- **`go/internal/zkrpclient/zkrpclient_test.go`** (new file): tests against
+  the real built `zkrp` release binary (skips, rather than fails, if it
+  isn't built) -- honest roundtrip, wrong measurement denied, context
+  mismatch denied, over-cap still refuses to prove under the attested path
+  too.
+- **`go/gatewayservice/registry.go`**: `Registry` gains a second store,
+  `measStore`, plus `PublishMeasurement`/`GetMeasurement` mirroring
+  `Publish`/`Get` -- same re-verify-signature-on-every-read defense against
+  a tampered registry file.
+- **`go/gatewayservice/main.go`**: the registry-loading loop at startup now
+  peeks each file's `ptype` (`predicate.PeekPType`) before choosing which
+  parser to use, so a `prover_measurement` doc dropped into the same
+  registry directory as `range_leq` predicates loads correctly instead of
+  silently mis-parsing into the wrong struct shape. `proofPayload` gained
+  an optional `attestation_hex` field. `verifyAttachment`'s policy, in
+  order: if the registry has a `prover_measurement@1` predicate, its value
+  becomes the expected measurement passed to `VerifyAttested`; if the
+  envelope carries an attestation (which every current prover always
+  produces), it is *always* verified via the attested transcript,
+  regardless of whether a measurement policy is registered -- the
+  alternative (falling back to the plain transcript when no policy is
+  configured) doesn't verify at all, since the proof was built with the
+  attestation absorbed; if no attestation is present at all, the call is
+  only denied when a measurement policy actively requires one, otherwise
+  it falls back to the original unattested `Verify` path unchanged. The
+  attestation digest and measurement are logged (`log.Printf`) alongside
+  the existing audit line, not added to the hash-chained audit entry --
+  see `IMPLEMENTATION_HLD.md` §6 for why that's a deliberately separate
+  piece of work.
+- **`go/gatewayservice/attestation_test.go`** (new file): three integration
+  tests against the real built `zkrp` binary and a real two-predicate
+  registry (one `range_leq`, one `prover_measurement`, both signed by the
+  same throwaway governance key so the registry's single pubkey actually
+  verifies both) -- correct measurement allows, wrong measurement denies,
+  and no measurement policy registered still allows (this last one is the
+  regression test for the transcript-mismatch bug found while building
+  this: an earlier version fell back to the *unattested* transcript
+  whenever no policy was registered, which fails every attested proof
+  unconditionally, since `proverservice` always attests now).
+- **`go/proverservice/main.go`**: `handleProve` calls `ProveAttested`
+  instead of `Prove` and includes `attestation_hex` in the envelope
+  payload unconditionally -- a real enclave doesn't get to opt out of
+  proving what it is on request; whether anyone checks the attestation is
+  the gateway's policy decision, not the prover's.
+- **`python/governance_cli.py`**: `cmd_define`'s document-writing logic was
+  factored out into `_write_predicate_doc` and reused by a new
+  `cmd_define_measurement` / `define-measurement` subcommand, which signs
+  a `prover_measurement` predicate (`{"algo", "measurement_hex"}` params)
+  the same way `define` signs a `range_leq` one. `cmd_list`/`cmd_verify`
+  needed no changes -- `Predicate.params` was already a free-form dict on
+  the Python side.
+
+**Deliberately not done in this pass** (see `IMPLEMENTATION_HLD.md` §6):
+the audit-log schema is unchanged (attestation fields are logged, not
+hashed into the chain); no Docker Compose/Helm bootstrap step registers a
+`prover_measurement` predicate, so the existing demo stacks and
+`verify_e2e.py`'s 19/19 continue to exercise the unattested-policy path
+exactly as before; real Nitro Enclaves/GCP Confidential Space integration
+remains unattempted, per `HLD.md` §7's validation strategy.
+
+Verified: `cargo test` (21 cases) and `cargo build --release`; `go build
+./...`, `go vet ./...`, `go test ./...` (including the 3 new
+`gatewayservice` integration tests and 4 new `zkrpclient` tests against the
+real release binary); a real `governance_cli.py define-measurement` run
+producing a signature this Go code actually verifies; manual end-to-end
+HTTP calls against real running `gateway-service`/`prover-service`
+processes for the correct-measurement (ALLOW), wrong-measurement (DENY),
+and no-policy-registered (ALLOW, unattested-fallback-would-have-failed)
+cases; a full `experiments/run_all.sh` rerun afterward, both engines still
+19/19.
+
+---
+
 ## Cross-cutting: what changed vs. `Spec.md`'s literal text
 
 - **Prover/gateway language**: Python as specced for P0, then Go+Rust for
