@@ -5,6 +5,42 @@ chronological order. See `IMPLEMENTATION_HLD.md`/`IMPLEMENTATION_LLD.md`
 for full architectural detail and `Spec.md`'s status addendum for how this
 relates to the original one-day spec.
 
+## PR #9 — Case-study legal grounding + Spec.md formatting cleanup
+
+Replaces the case study's only US-specific regulatory reference (SEC
+15c3-5) with an EU grounding that actually fits this project's thesis:
+GDPR's data-minimisation principle, not a securities pre-trade rule. Also
+reformats `Spec.md` into proper Markdown (real headers, bullet lists, code
+fences) matching this changelog's style -- content otherwise unchanged,
+confirmed by a normalized word-level diff against the prior version.
+
+### Changed
+- `python/demo_trading.py`: the case study's private notional is now
+  framed as a retail client's order -- personal data under GDPR, since it
+  relates to an identifiable person. Docstring cites GDPR Art. 5(1)(c)
+  (data minimisation) + Art. 25 (protection by design/default) as the
+  primary grounding (this is literally the project's thesis), GDPR Art. 22
+  (automated decision-making) and the EU AI Act's Art. 12 record-keeping
+  duty as narrower, explicitly hedged fits (neither asserted to apply to
+  any given deployment), and MiFID II Art. 17 / RTS 6 for why a pre-trade
+  notional cap exists as a business rule in the first place. All
+  SEC/FINRA references removed (there was exactly one, in this file).
+- `Spec.md`: reformatted from plain prose with ALL-CAPS pseudo-headers into
+  real Markdown (`##` headers, bullet lists, `` `code` `` spans, ` ```bash `
+  fences for commands) -- no wording changes beyond what the reformat
+  itself required. Added one new paragraph to the status addendum noting
+  PR #7/#8 (attestation-bound proofs), which had landed but weren't yet
+  reflected there.
+
+### Verified
+- `python3 demo_trading.py` still runs end-to-end: ALLOW decision, audit
+  chain intact, negative scenario still refuses to prove.
+- Repo-wide grep for `SEC`/`FINRA`/`15c3-5`: zero hits.
+- `Spec.md` content check: normalized (markdown-stripped) word-level diff
+  against the pre-reformat version shows only case changes in the old
+  ALL-CAPS headers and the one deliberately added status-addendum
+  paragraph -- nothing else changed.
+
 ## PR #8 — Attestation-bound predicate proofs (mock implementation)
 
 Implements PR #7's design against a local mock attestation authority
