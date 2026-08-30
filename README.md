@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/45h0kg/zk-proof-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/45h0kg/zk-proof-gateway/actions/workflows/ci.yml)
 
-Reference implementation for the paper *"Zero-Knowledge Data Minimization
-for Multi-Agent AI Systems: A Proof-Verification Gateway Architecture for
-Data Privacy Between Agents"* (arXiv link: TBD).
+Reference implementation for the paper *"Zero-Knowledge Predicate Proofs
+Between AI Agents: A Measured, Cross-Protocol Gateway and the
+Source-Integrity Gap"* (arXiv link: TBD).
 
 The problem: when one AI agent must convince another that a value complies
 with policy, today it either sends the raw value or asserts compliance in
@@ -33,7 +33,7 @@ rust/zkrp/                Bulletproofs engine ("E2", dalek ristretto255) CLI
 go/gatewayservice/        gateway rewrite in Go, verifies via rust/zkrp (E2)
 go/proverservice/         prover rewrite in Go, proves via rust/zkrp (E2)
 docker/                   Dockerfiles + compose for the Go+Rust stack
-helm/zk-proof-gateway/    Helm chart for the Go+Rust stack (lint/template-verified)
+helm/zk-proof-gateway/    Helm chart for the Go+Rust stack (installed + verified on kind)
 terraform/gke/, eks/      reference cluster + helm_release modules (unapplied)
 experiments/run_all.sh    one-command full reproduction with logged output
 results/                  sample outputs from a logged run (regenerate with run_all.sh)
@@ -215,6 +215,34 @@ chart's `values.yaml` before doing so yourself. Deliberately does not
 attempt Confidential Space or Nitro Enclaves in this pass -- that is the
 follow-up paper's work, and a half-done enclave integration is worse than
 none.
+
+## Attestation-bound predicate proofs (experimental, mock only)
+
+`HLD.md` §7 proposes fusing a hardware attestation with the predicate
+proof, so verifying one artifact certifies both the predicate *and* the
+specific measured prover binary that produced the committed value --
+closing the source-integrity gap the topologies above only address by
+convention (co-locate the prover with the source of truth). This is
+implemented against a **mock** attestation authority
+(`rust/zkrp/src/attestation.rs`): Ed25519-signed, Nitro-shaped fields, but
+a fixed, publicly-derivable root seed standing in for a hardware root of
+trust -- not real Nitro Enclaves or GCP Confidential Space.
+
+- `zkrp attest-prove <nbits> <cap> <value> <ctx>` / `zkrp attest-verify
+  ...` / `zkrp attest-measurement` -- the CLI surface for the mutual
+  binding (the attestation's `report_data` commits to the proof; the
+  proof's Merlin transcript commits to the attestation) and the 6-step
+  verification chain.
+- A governance-signed `prover_measurement` predicate type, defined the
+  same way as `range_leq`: `python3 governance_cli.py define-measurement
+  --measurement-hex <hex> --owner <team> --key keys/governance.secret
+  --out registry/`. If one is registered, the Go gateway requires and
+  checks it; if none is registered, deployments behave exactly as before
+  (see `IMPLEMENTATION_HLD.md` §7 for the exact policy).
+
+Not wired into the Docker Compose/Helm demo stacks or `verify_e2e.py` --
+see `HLD.md` §7 and `CHANGELOG.md`'s PR #7/#8 entries for the full design,
+implementation detail, and what's explicitly still open.
 
 ## Integrating this into an agentic design
 
@@ -455,8 +483,13 @@ own environment line.
 
 This is a research prototype accompanying a paper, not a product. The
 Python engine is readable and auditable but not constant-time; the Rust
-engine uses the dalek Bulletproofs implementation. Only the `range_leq`
-predicate type is wired end to end. No external security audit has been
+engine uses the dalek Bulletproofs implementation. Two predicate types are
+wired end to end: `range_leq` and `prover_measurement` (see
+[Attestation-bound predicate proofs](#attestation-bound-predicate-proofs-experimental-mock-only)
+below). The attestation authority behind `prover_measurement` is a mock
+with a publicly derivable root seed -- it exercises the binding and
+verification logic but provides no hardware root of trust and no security
+property against a real adversary. No external security audit has been
 performed. Do not use for real funds or real personal data.
 
 ## License
@@ -471,9 +504,8 @@ Claude). All results are reproducible from this repository.
 
 ```bibtex
 @misc{gopalakrishna2026zkgateway,
-  title={Zero-Knowledge Data Minimization for Multi-Agent AI Systems:
-         A Proof-Verification Gateway Architecture for Data Privacy
-         Between Agents},
+  title={Zero-Knowledge Predicate Proofs Between AI Agents: A Measured,
+         Cross-Protocol Gateway and the Source-Integrity Gap},
   author={Subbabhatta Gopalakrishna, Ashok},
   year={2026},
   eprint={TBD},

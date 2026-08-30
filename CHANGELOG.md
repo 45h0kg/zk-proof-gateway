@@ -5,6 +5,34 @@ chronological order. See `IMPLEMENTATION_HLD.md`/`IMPLEMENTATION_LLD.md`
 for full architectural detail and `Spec.md`'s status addendum for how this
 relates to the original one-day spec.
 
+## PR #10 — README staleness fixes
+
+Four factual staleness issues in the README, fixed:
+
+### Changed
+- Repository layout: `helm/zk-proof-gateway/`'s status line said
+  "lint/template-verified", contradicting the Kubernetes section a few
+  paragraphs down (`helm install` has actually been run and verified on
+  `kind`). Now says "installed + verified on kind".
+- Paper title updated everywhere it appears (intro line + BibTeX) from
+  "Zero-Knowledge Data Minimization for Multi-Agent AI Systems: A
+  Proof-Verification Gateway Architecture for Data Privacy Between
+  Agents" to the current title, "Zero-Knowledge Predicate Proofs Between
+  AI Agents: A Measured, Cross-Protocol Gateway and the Source-Integrity
+  Gap".
+- Security status said "Only the `range_leq` predicate type is wired end
+  to end", which PR #8 made false. Now names both `range_leq` and
+  `prover_measurement`, with an explicit caveat that the attestation
+  authority behind the latter is a mock with a publicly derivable root
+  seed -- no hardware root of trust, no security property against a real
+  adversary.
+- New "Attestation-bound predicate proofs (experimental, mock only)"
+  section: the README previously said nothing about PR #7/#8's work at
+  all, so a reader scanning it would not learn it exists. Points at `zkrp
+  attest-prove`/`attest-verify`/`attest-measurement`, the
+  `prover_measurement` predicate, and `governance_cli.py
+  define-measurement`, linked from the Security status section.
+
 ## PR #9 — Case-study legal grounding + Spec.md formatting cleanup
 
 Replaces the case study's only US-specific regulatory reference (SEC
