@@ -498,9 +498,9 @@ MIT. See LICENSE.
 
 ## Citation and provenance
 
-If you use this work, cite the paper (BibTeX below once the arXiv ID is
-live). This implementation was developed with AI assistance (Anthropic's
-Claude). All results are reproducible from this repository.
+If you use this work, cite the paper:
+[arXiv:2608.30083](https://arxiv.org/abs/2608.30083).
+All results are reproducible from this repository.
 
 ```bibtex
 @misc{gopalakrishna2026zkgateway,
@@ -508,8 +508,9 @@ Claude). All results are reproducible from this repository.
          Cross-Protocol Gateway and the Source-Integrity Gap},
   author={Subbabhatta Gopalakrishna, Ashok},
   year={2026},
-  eprint={TBD},
+  eprint={2608.30083},
   archivePrefix={arXiv},
-  primaryClass={cs.CR}
+  primaryClass={cs.CR},
+  doi={10.48550/arXiv.2608.30083}
 }
 ```
